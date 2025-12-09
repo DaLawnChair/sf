@@ -1,5 +1,5 @@
 
-21/1/2025
+21/11/2025
 Goals:
 This repo is to mainly view the affect of what can be called 'first-chunk priority' DMD. The hypothesis is that the autoregressive model needs a good first chunk generation in order to match the video made by the bidirectional teacher, so we focus early on getting the first chunk to match. 
 
@@ -8,7 +8,7 @@ Later on we incorporate causuallity through training, which I believe is an easi
 There are not a lot to base this off of as there are not a lot of plots publically available for self-forcing/Wan/video diffusion model distillation. But we will try to do it here I guess.
 
 
-03/21/2025
+03/12/2025
 This is built upon the new_training_self-forcing/, where we were experimenting on having reinjection of latents.
 
 This will be focued on getting actual implementation of a first-chunk focused training methods.
@@ -21,10 +21,21 @@ Idea 2 is easier to implement, however I do not have the data for it. So we will
 But before all of this, we will need to modify configurations to actually run the Self-Forcing code on torchrun.
 
 What is added:
+System changes
 * added vidprompt_dataset to prompts/
 * config files to try to reproduce the Self-Forcing model, self_forcing_dmd_recreate.yaml and self_forcing_ode_recreate.yaml
 * Focus is now on self_forcing_dmd_recreate.yaml
+* get_paths.sh and make_env.sh which sets up the paths and environment respectively
+* run_real_task.sh, which is an entrypoint for training using the Task
 
+Actual code changes
 * wan/wan_causal.py need to change CausalWan.set_gradient_checkpointing(value) because paramter enable=True is used when training. Have to have 2 parameters value and enable that default to False and do an or between them.
 
+
 * because we want to run this as a task, we will need to source variables, so make source_paths.sh and then change utils/wan_wrapper.py FOLDER_PATH
+
+
+9/12/2025
+* updated make_env.sh and get_paths.sh
+* added generate_ode_pairs.sh, to be ran on webstudio to get ODE pairs. Currently generating wan2.1-1.3B on guidance_step=3.0, timestep=5.0, on vidprom_filtered_extended.txt on webstudio with 2 A800s. More info in how_to_generate_ode_latents.sh
+* updated scripts/generate_ode_pairs.py and scripts/create_lmdb_iterative.py to help faciliate these. Will likely need to update this.

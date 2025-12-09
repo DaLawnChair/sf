@@ -1,3 +1,11 @@
+# ===
+#john: python scripts/generate_ode_pairs.py leads to import errors. Fix them
+import sys
+import os
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+# ===
+
 from tqdm import tqdm
 import numpy as np
 import argparse
@@ -34,7 +42,9 @@ def main():
 
     seen_prompts = set()  # for deduplication
 
-    for index, file in tqdm(enumerate(all_files)):
+    # for index, file in tqdm(enumerate(all_files)):
+    for index, file in tqdm(enumerate(reversed(all_files))):
+        import ipdb;ipdb.set_trace()
         # read from disk
         data_dict = torch.load(file)
 

@@ -13,6 +13,7 @@ pipeline/bidirectional_diffusion_inference.py
 pipeline/bidirectional_inference.py
 pipeline/causal_diffusion_inference.py
 pipeline/causal_inference.py
+pipeline/given_first_causal_inference.py
 pipeline/self_forcing_training.py
 self_forcing.egg-info/PKG-INFO
 self_forcing.egg-info/SOURCES.txt

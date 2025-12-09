@@ -39,14 +39,36 @@ echo "[DIST] NNODES=$NNODES NODE_RANK=$NODE_RANK MASTER_ADDR=$MASTER_ADDR MASTER
 
 # End of Samuel's config file copy-over
 # ====================================================================
-nproc_per_node=1
+# python setup.py develop
+nproc_per_node=2
+NNODES=1
+
+export CUDA_VISIBLE_DEVICES="0,1"
 torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
   --rdzv_backend=c10d \
   --rdzv_endpoint $MASTER_ADDR":"$MASTER_PORT \
-  train.py \
-  --config_path configs/self_forcing_ode_recreate.yaml \
-  --logdir logs/ode_training \
-  --disable-wandb
+  scripts/generate_ode_pairs.py \
+  --caption_path "/home/ma-user/work/algorithm/arvd_repos/031225_progressive_sf/prompts/vidprom_filtered_extended.txt" \
+  --output_folder "/home/ma-user/work/dataset/self_forcing/self_forcing/ode_init_guidance3.0_wan1.3B_vidprom/" \
+  --timeshift_scale 5.0 \
+  --guidance_scale 3.0 # noted inside of config/self_forcing_ode.yaml
+#timeshift scale used for inference
+  
+
+  
+## sample, should run after the generate_ode_pairs.py is done
+# python scripts/create_lmdb_iterative.py \
+#     --data_path "/home/ma-user/work/dataset/self_forcing/self_forcing/ode_init_data_webstudio_clone" \
+#     --lmdb_path "/home/ma-user/work/dataset/self_forcing/self_forcing/ode_init_data_webstudio_clone_lmdb"
+
+# torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
+#   --rdzv_backend=c10d \
+#   --rdzv_endpoint $MASTER_ADDR":"$MASTER_PORT \
+#   train.py \
+#   --config_path configs/self_forcing_ode_recreate.yaml \
+#   --output_folder "/home/ma-user/work/dataset/self_forcing/self_forcing/ode_init_data/"
+#   --logdir logs/ode_training \
+#   --disable-wandb
 
 
 

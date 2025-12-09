@@ -1,3 +1,22 @@
+"""
+Added sys path
+
+sending args to init_model() to change the shift 
+
+add timeshift_scale to the args.
+
+"""
+
+
+# ===
+#john: python scripts/generate_ode_pairs.py leads to import errors. Fix them
+import sys
+import os
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+# ===
+
+
 from utils.distributed import launch_distributed_job
 from utils.scheduler import FlowMatchScheduler
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder
@@ -10,13 +29,15 @@ import math
 import os
 
 
-def init_model(device):
+def init_model(args, device):
     model = WanDiffusionWrapper().to(device).to(torch.float32)
     encoder = WanTextEncoder().to(device).to(torch.float32)
     model.model.requires_grad_(False)
 
+    
+    timeshift_scale = args.timeshift_scale
     scheduler = FlowMatchScheduler(
-        shift=8.0, sigma_min=0.0, extra_one_step=True)
+        shift=timeshift_scale, sigma_min=0.0, extra_one_step=True)
     scheduler.set_timesteps(num_inference_steps=48, denoising_strength=1.0)
     scheduler.sigmas = scheduler.sigmas.to(device)
 
@@ -35,7 +56,9 @@ def main():
     parser.add_argument("--output_folder", type=str)
     parser.add_argument("--caption_path", type=str)
     parser.add_argument("--guidance_scale", type=float, default=6.0)
-
+    parser.add_argument("--timeshift_scale", type=float, default=8.0) # add timeshift scale
+    
+    
     args = parser.parse_args()
 
     # launch_distributed_job()
@@ -47,7 +70,7 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-    model, encoder, scheduler, unconditional_dict = init_model(device=device)
+    model, encoder, scheduler, unconditional_dict = init_model(args,device=device)
 
     dataset = TextDataset(args.caption_path)
 
@@ -109,7 +132,7 @@ def main():
         stored_data = noisy_inputs
 
         torch.save(
-            {prompt: stored_data.cpu().detach()},
+            {prompt['prompts']: stored_data.cpu().detach()}, # john: prompt is a dict, use string
             os.path.join(args.output_folder, f"{prompt_index:05d}.pt")
         )
 

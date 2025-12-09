@@ -6,8 +6,8 @@ if [[ "$1" == "task" ]]; then
     echo "MODE: task"
     export JOHN_MODE_FOR_TRAINING="task"
     export TASK_RUN_REPO="/opt/huawei/schedule-train/algorithm/031225_progressive_sf/"
-    export DATASET_PATH="/home/ma-user/work/dataset/"
-    export CHECKPOINT_SAVE="/home/ma-user/work/algorithm/arvd_repos/"
+    export DATASET_PATH="/opt/huawei/dataset/"
+    export CHECKPOINT_SAVE="/opt/huawei/checkpoint/"
     export qwen3_vl_files="/opt/huawei/dataset/john_env/only_selfforcing/"
     # export WHEELHOUSE_PATH="/opt/huawei/schedule-train/algorithm/wheelhouse"
 else

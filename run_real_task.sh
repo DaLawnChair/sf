@@ -2,7 +2,7 @@
 
 # INITAL SET UP
 echo "INITIAL SET UP"
-
+cd 031225_progressive_sf
 source ./get_paths.sh task
 cd $TASK_RUN_REPO
 echo "echo $qwen3_vl_files"

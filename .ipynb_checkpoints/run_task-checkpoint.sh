@@ -39,7 +39,7 @@ echo "[DIST] NNODES=$NNODES NODE_RANK=$NODE_RANK MASTER_ADDR=$MASTER_ADDR MASTER
 # End of Samuel's config file copy-over
 # ====================================================================
 nproc_per_node=2
-NNODES=1
+NNODES=2
 
 CUDA_VISIBLE_DEVICES="0,1" torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
   --rdzv_backend=c10d \
