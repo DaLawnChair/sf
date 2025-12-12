@@ -1,14 +1,35 @@
 #!/bin/bash
+echo "where am i?"
+pwd
 
-# INITAL SET UP
-echo "INITIAL SET UP"
-cd 031225_progressive_sf
-source ./get_paths.sh task
-cd $TASK_RUN_REPO
-echo "echo $qwen3_vl_files"
-# echo $qwen3_vl_files
+export NCLL_NVLS_ENABLE="0"
+run_task_folder="091225_add_grad_acc_temp"
 
-source ./make_env.sh
+if  [[ -z "${JOHN_MODE_FOR_TRAINING}" ]]; then 
+    echo "Not source, so perform sourcing and make environment"
+    echo "INITIAL SET UP"
+    cd "algorithm/"$run_task_folder # pwd is /opt/huawei/schedule-train/
+    echo "where am i?"
+    pwd
+    source ./get_paths.sh task $run_task_folder
+    cd $TASK_RUN_REPO
+    echo "echo $qwen3_vl_files"
+    source ./make_env.sh
+else
+    echo "Already sourced (aka within ${JOHN_MODE_FOR_TRAINING}), so do not do any sourcing"
+fi
+
+
+echo "\n\n\n"
+echo "\n\n\n"
+echo "================================== ALL INFOS =================================="
+nvcc --version
+nvidia-smi
+pip show torch
+cat /etc/os-release
+echo "================================== DONE LISTING ALL INFOS =================================="
+echo "\n\n\n"
+echo "\n\n\n"
 
 
 # ====================================================================
@@ -50,7 +71,14 @@ echo "[DIST] NNODES=$NNODES NODE_RANK=$NODE_RANK MASTER_ADDR=$MASTER_ADDR MASTER
 
 # End of Samuel's config file copy-over
 # ====================================================================
-nproc_per_node=2
+export CUDA_VISIBLE_DEVICES="0,1"
+
+if  [[ "${JOHN_MODE_FOR_TRAINING}" == "task" ]]; then 
+    nproc_per_node=8
+else
+    nproc_per_node=2
+fi
+
 NNODES=1
 
 torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \

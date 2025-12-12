@@ -5,6 +5,10 @@ from .causal_inference import CausalInferencePipeline
 from .self_forcing_training import SelfForcingTrainingPipeline
 
 from .given_first_causal_inference import GivenFirstLatentCausalInferencePipeline
+from .progressive_causal_inference import ProgressiveCausalInferencePipeline
+
+from .progressive_self_forcing_training import ProgressiveSelfForcingTrainingPipeline
+
 
 __all__ = [
     "BidirectionalDiffusionInferencePipeline",
@@ -14,5 +18,7 @@ __all__ = [
     "SelfForcingTrainingPipeline",
     
     # john added:
-    "GivenFirstLatentCausalInferencePipeline"
+    "GivenFirstLatentCausalInferencePipeline",
+    "ProgressiveSelfForcingTrainingPipeline",
+    "ProgressiveCausalInferencePipeline"
 ]

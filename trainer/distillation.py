@@ -1,3 +1,9 @@
+"""
+Same implementation as self-forcing/trainer/distillation.py, but with gradient accumulation added.  
+Reference: https://github.com/NVlabs/LongLive/blob/main/trainer/distillation.py for changes regarding the grad accumulation.
+
+"""
+
 import gc
 import logging
 
@@ -15,7 +21,6 @@ import torch
 import wandb
 import time
 import os
-
 
 class Trainer:
     def __init__(self, config):
@@ -36,6 +41,8 @@ class Trainer:
         self.causal = config.causal
         self.disable_wandb = config.disable_wandb
 
+        self.gradient_accumulation_steps = getattr(config, "gradient_accumulation_steps", 1) # john: add grad accumulation step
+
         # use a random seed for the training
         if config.seed == 0:
             random_seed = torch.randint(0, 10000000, (1,), device=self.device)
@@ -43,6 +50,12 @@ class Trainer:
             config.seed = random_seed.item()
 
         set_seed(config.seed + global_rank)
+
+
+        if self.is_main_process:
+            print(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")   
+            if self.gradient_accumulation_steps > 1:
+                print(f"Effective batch size: {config.batch_size * self.gradient_accumulation_steps * self.world_size}")
 
         if self.is_main_process and not self.disable_wandb:
             wandb.login(host=config.wandb_host, key=config.wandb_key)
@@ -206,7 +219,15 @@ class Trainer:
             print("Model saved to", os.path.join(self.output_path,
                   f"checkpoint_model_{self.step:06d}", "model.pt"))
 
+
+
+
     def fwdbwd_one_step(self, batch, train_generator):
+        """ 
+        John: same as self-forcing, but add in grad accumulation when performing loss.backwards(). Reported result is still without grad accumulation.
+
+        Notabily generator_grad_norm and critic_grad_norm are no longer clipped here, but rather after accumulation in train().
+        """
         self.model.eval()  # prevent any randomness (e.g. dropout)
 
         if self.step % 20 == 0:
@@ -250,13 +271,16 @@ class Trainer:
                 initial_latent=image_latent if self.config.i2v else None
             )
 
-            generator_loss.backward()
-            generator_grad_norm = self.model.generator.clip_grad_norm_(
-                self.max_grad_norm_generator)
+            scaled_generator_loss = generator_loss / self.gradient_accumulation_steps  # john: scale loss for grad accumulation
+            scaled_generator_loss.backward()
+            # generator_grad_norm = self.model.generator.clip_grad_norm_(
+            #     self.max_grad_norm_generator)
 
-            generator_log_dict.update({"generator_loss": generator_loss,
-                                       "generator_grad_norm": generator_grad_norm})
+            # generator_log_dict.update({"generator_loss": generator_loss, # keep original
+            #                            "generator_grad_norm": generator_grad_norm})
 
+            generator_log_dict.update({"generator_loss": generator_loss, # keep original
+                                       "generator_grad_norm": torch.tensor(0.0, device=self.device)}) # clip performed after accumulation
             return generator_log_dict
         else:
             generator_log_dict = {}
@@ -269,14 +293,14 @@ class Trainer:
             clean_latent=clean_latent,
             initial_latent=image_latent if self.config.i2v else None
         )
-
-        critic_loss.backward()
-        critic_grad_norm = self.model.fake_score.clip_grad_norm_(
-            self.max_grad_norm_critic)
-
-        critic_log_dict.update({"critic_loss": critic_loss,
-                                "critic_grad_norm": critic_grad_norm})
-
+        scaled_critic_loss = critic_loss / self.gradient_accumulation_steps  # john: scale loss for grad accumulation
+        scaled_critic_loss.backward()
+        # critic_grad_norm = self.model.fake_score.clip_grad_norm_(
+        #     self.max_grad_norm_critic)
+        # critic_log_dict.update({"critic_loss": critic_loss, # log original loss
+        #                         "critic_grad_norm": critic_grad_norm})
+        critic_log_dict.update({"critic_loss": critic_loss, # log original loss
+                                "critic_grad_norm": torch.tensor(0.0, device=self.device)}) # clip performed after accumulation
         return critic_log_dict
 
     def generate_video(self, pipeline, prompts, image=None):
@@ -314,27 +338,46 @@ class Trainer:
 
         while True:
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
-
-            # Train the generator
+            
             if TRAIN_GENERATOR:
                 self.generator_optimizer.zero_grad(set_to_none=True)
-                extras_list = []
+            self.critic_optimizer.zero_grad(set_to_none=True)
+
+            accumulated_generator_logs = []
+            accumulated_critic_logs = []
+
+            for accumulation_step in range(self.gradient_accumulation_steps):
+                print(f"======== On accumulation_step: {accumulation_step+1} ========")
                 batch = next(self.dataloader)
-                extra = self.fwdbwd_one_step(batch, True)
-                extras_list.append(extra)
-                generator_log_dict = merge_dict_list(extras_list)
+                if TRAIN_GENERATOR:
+                    extra_gen = self.fwdbwd_one_step(batch, True)
+                    print("done generator generation")
+                    accumulated_generator_logs.append(extra_gen)
+
+                extra_crit = self.fwdbwd_one_step(batch, False)
+                print("done critic generation")
+                accumulated_critic_logs.append(extra_crit)
+
+            # compute grad norm and update params
+            if TRAIN_GENERATOR:
+                generator_grad_norm = self.model.generator.clip_grad_norm_(self.max_grad_norm_generator)
+                generator_log_dict = merge_dict_list(accumulated_generator_logs)
+                generator_log_dict["generator_grad_norm"] = generator_grad_norm
+
                 self.generator_optimizer.step()
                 if self.generator_ema is not None:
                     self.generator_ema.update(self.model.generator)
+                    
+                print("done generator step")
+            else:
+                generator_log_dict = {}
 
-            # Train the critic
-            self.critic_optimizer.zero_grad(set_to_none=True)
-            extras_list = []
-            batch = next(self.dataloader)
-            extra = self.fwdbwd_one_step(batch, False)
-            extras_list.append(extra)
-            critic_log_dict = merge_dict_list(extras_list)
+            # critic grad norm and update
+            critic_grad_norm = self.model.fake_score.clip_grad_norm_(self.max_grad_norm_critic)
+            critic_log_dict = merge_dict_list(accumulated_critic_logs)
+            critic_log_dict["critic_grad_norm"] = critic_grad_norm
             self.critic_optimizer.step()
+            print("done critic step")
 
             # Increment the step since we finished gradient update
             self.step += 1

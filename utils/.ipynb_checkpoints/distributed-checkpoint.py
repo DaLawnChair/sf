@@ -86,6 +86,24 @@ def launch_distributed_job(backend: str = "nccl"):
     dist.init_process_group(rank=rank, world_size=world_size, backend=backend,
                             init_method=init_method, timeout=timedelta(minutes=30))
     torch.cuda.set_device(local_rank)
+    
+    
+def launch_distributed_job_multiinstance_per_gpu(backend: str = "nccl"):
+    num_gpus = torch.cuda.device_count()
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    host = os.environ["MASTER_ADDR"]
+    port = int(os.environ["MASTER_PORT"])
+
+    if ":" in host:  # IPv6
+        init_method = f"tcp://[{host}]:{port}"
+    else:  # IPv4
+        init_method = f"tcp://{host}:{port}"
+    dist.init_process_group(rank=rank, world_size=world_size, backend=backend,
+                            init_method=init_method, timeout=timedelta(minutes=30))
+    torch.cuda.set_device(local_rank % num_gpus)
+    
 
 
 class EMA_FSDP:

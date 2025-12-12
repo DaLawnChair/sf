@@ -49,3 +49,4 @@ num_frame_per_block: 3
 load_raw_video: false
 model_kwargs:
   timestep_shift: 5.0
+gradient_accumulation_steps: 8

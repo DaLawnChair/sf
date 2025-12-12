@@ -39,3 +39,15 @@ Actual code changes
 * updated make_env.sh and get_paths.sh
 * added generate_ode_pairs.sh, to be ran on webstudio to get ODE pairs. Currently generating wan2.1-1.3B on guidance_step=3.0, timestep=5.0, on vidprom_filtered_extended.txt on webstudio with 2 A800s. More info in how_to_generate_ode_latents.sh
 * updated scripts/generate_ode_pairs.py and scripts/create_lmdb_iterative.py to help faciliate these. Will likely need to update this.
+
+
+
+branch: add in grad accumulation
+* updates trainer/distllation.py to use gradient accumulation, taken from the implementation of LongLive
+* updated get_paths.sh to accept arg2, which denotes the folder to run inside of arvd_repos/algorithm. Update run_real_task.sh to change based on if sourcing is already done to determine if we are in webstudio or a task
+
+
+* also add in the progressive self-forcing inference code (ProgressiveCausalInferencePipeline), and verify that the generation is performing the correct chunk inside of videos/baseline2. This gives some confidence that ProgressiveSelfForcingInferencePipeline will work as it has the same first_window_size logic
+
+* adding scripts/generate_videos_bidirectional.py and generate_videos_bidirectional.sh, which will generate videos from vidprom_filtered_extended.txt. However this method yields bad faces and movement. Thus I updated it to use the original wan codebase and just have it return the gaussian noise
+

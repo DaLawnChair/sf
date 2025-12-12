@@ -5,7 +5,7 @@
 # set -e # if a command fails, do not perform any later commands
 
 
-echo "031225 version"
+echo "091225 version"
 pwd
 ############################  Fixing cuda  ############################
 echo "NVIDIA_VISIBLE_DEVICES, $NVIDIA_VISIBLE_DEVICES"

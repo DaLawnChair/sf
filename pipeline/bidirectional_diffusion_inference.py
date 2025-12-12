@@ -1,3 +1,6 @@
+"""
+Has updates
+"""
 from tqdm import tqdm
 from typing import List
 import torch
@@ -54,9 +57,10 @@ class BidirectionalDiffusionInferencePipeline(torch.nn.Module):
         unconditional_dict = self.text_encoder(
             text_prompts=[self.args.negative_prompt] * len(text_prompts)
         )
+        
 
         latents = noise
-
+        
         sample_scheduler = self._initialize_sample_scheduler(noise)
         for _, t in enumerate(tqdm(sample_scheduler.timesteps)):
             latent_model_input = latents
@@ -75,6 +79,7 @@ class BidirectionalDiffusionInferencePipeline(torch.nn.Module):
                 return_dict=False)[0]
             latents = temp_x0.squeeze(0)
 
+    
         x0 = latents
         video = self.vae.decode_to_pixel(x0)
         video = (video * 0.5 + 0.5).clamp(0, 1)
