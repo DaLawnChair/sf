@@ -57,17 +57,31 @@ class Trainer:
             if self.gradient_accumulation_steps > 1:
                 print(f"Effective batch size: {config.batch_size * self.gradient_accumulation_steps * self.world_size}")
 
-        if self.is_main_process and not self.disable_wandb:
-            wandb.login(host=config.wandb_host, key=config.wandb_key)
+        # if self.is_main_process and not self.disable_wandb:
+        #     wandb.login(host=config.wandb_host, key=config.wandb_key)
+        #     wandb.init(
+        #         config=OmegaConf.to_container(config, resolve=True),
+        #         name=config.config_name,
+        #         mode="online",
+        #         entity=config.wandb_entity,
+        #         project=config.wandb_project,
+        #         dir=config.wandb_save_dir
+        #     )
+        
+        if self.is_main_process: # always keep an instance of an offline wandb for training
+            # wandb.login(host=config.wandb_host, key=config.wandb_key)
+            
+            os.makedirs(config.wandb_save_dir, exist_ok=True)
             wandb.init(
                 config=OmegaConf.to_container(config, resolve=True),
                 name=config.config_name,
-                mode="online",
+                mode="offline",
                 entity=config.wandb_entity,
                 project=config.wandb_project,
                 dir=config.wandb_save_dir
             )
-
+            print(f"Wandb initalized. Saving to {config.wandb_save_dir}")
+            
         self.output_path = config.logdir
 
         # Step 2: Initialize the model and optimizer
@@ -218,8 +232,6 @@ class Trainer:
                        f"checkpoint_model_{self.step:06d}", "model.pt"))
             print("Model saved to", os.path.join(self.output_path,
                   f"checkpoint_model_{self.step:06d}", "model.pt"))
-
-
 
 
     def fwdbwd_one_step(self, batch, train_generator):

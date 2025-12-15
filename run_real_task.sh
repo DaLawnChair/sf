@@ -20,16 +20,35 @@ else
 fi
 
 
+python --version
+
+python  - <<'PY'
+import sys
+ 
+try:
+    import flash_attn
+    FLASH_ATTN_AVAILABLE = True
+
+except ModuleNotFoundError:
+    print("ERROR: could not load flash_attn. Exit with error code 1.")
+    FLASH_ATTN_AVAILABLE = False
+    sys.exit(1)
+PY
+
+
 echo "\n\n\n"
 echo "\n\n\n"
-echo "================================== ALL INFOS =================================="
+echo "================================== ALL SYSTEM INFOS =================================="
 nvcc --version
 nvidia-smi
 pip show torch
 cat /etc/os-release
-echo "================================== DONE LISTING ALL INFOS =================================="
+echo "================================== DONE LISTING ALL SYSTEM INFOS =================================="
 echo "\n\n\n"
 echo "\n\n\n"
+
+# cd flash-attention
+# python setup.py install
 
 
 # ====================================================================
@@ -71,11 +90,14 @@ echo "[DIST] NNODES=$NNODES NODE_RANK=$NODE_RANK MASTER_ADDR=$MASTER_ADDR MASTER
 
 # End of Samuel's config file copy-over
 # ====================================================================
-export CUDA_VISIBLE_DEVICES="0,1"
 
 if  [[ "${JOHN_MODE_FOR_TRAINING}" == "task" ]]; then 
+    export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
     nproc_per_node=8
+    # export CUDA_VISIBLE_DEVICES="0,1"
+    # nproc_per_node=2
 else
+    export CUDA_VISIBLE_DEVICES="0,1"
     nproc_per_node=2
 fi
 
@@ -86,29 +108,5 @@ torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
   --rdzv_endpoint $MASTER_ADDR":"$MASTER_PORT \
   train.py \
   --config_path configs/self_forcing_dmd_recreate.yaml \
-  --logdir logs/dmd_training \
-  --disable-wandb
-
-
-
-
-# Previous attempt: doesn't work
-# LOCAL_RANK="0" 
-# RANK="0" 
-# WORLD_SIZE="1" 
-# MASTER_ADDR="notebook-f352f131-5916-4bc0-b2a4-595c51570b41" 
-
-# #python3 train.py \
-# #        --config_path configs/self_forcing_ode.yaml \
-# #        --logdir logs/ode_training
-
-
-# torchrun --nnodes=$num_total_nodes --nproc_per_node=$num_gpus --rdzv_id=5235 \
-#   --rdzv_backend=c10d \
-#   --rdzv_endpoint $MASTER_ADDR":"$MASTER_PORT \
-#   train.py \
-#   --config_path configs/self_forcing_ode.yaml \
-#   --logdir logs/ode_training \
-#   --disalbe-wandb
-
-
+  --logdir "$DATASET_PATH"self_forcing/self_forcing/custom_dmd_training/logs \
+  --wandb-save-dir "$DATASET_PATH"self_forcing/self_forcing/custom_dmd_training

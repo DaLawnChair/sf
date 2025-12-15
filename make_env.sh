@@ -72,8 +72,8 @@ command -v pip || type -a pip
 # pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ -r ${qwen3_vl_files%/}/webstudio_requirements.txt
 pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ torch==2.8.0 torchvision==0.23.0
 pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ --upgrade-strategy=only-if-needed -r requirements.txt
-pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ flash-attn==2.8.3 #+cu128torch2.8
 pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ ipdb
+pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ flash-attn==2.8.3 #+cu128torch2.8
 
 
 ### Old method, tasks do not let you download
