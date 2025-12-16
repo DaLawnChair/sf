@@ -51,3 +51,14 @@ branch: add in grad accumulation
 
 * adding scripts/generate_videos_bidirectional.py and generate_videos_bidirectional.sh, which will generate videos from vidprom_filtered_extended.txt. However this method yields bad faces and movement. Thus I updated it to use the original wan codebase and just have it return the gaussian noise
 
+
+15/12/2025:
+branch: (progressive_naive) add progressive distillation methods, at least naiive ones:
+* this updates a lot of the codebase in order to implement an idea of "large window for w1 early, progressively shrink w1 for causality later" namely:
+    * trainer/progressive_distillation.py
+    * pipeline/progressive_self_forcing_training.py
+    * model/progressive_dmd.py
+* supporting changes across the board are required for the added method.
+* this is built of of the 091225_add_grad_acc_temp repo, which is a pretty stable branch, as the trainning works, not sure about how well it works though.
+* added some assert not torch.isnan() to check that there is no nan values generated for the latent or loss
+

@@ -1,4 +1,5 @@
 from pipeline import SelfForcingTrainingPipeline
+from pipeline.progressive_self_forcing_training import ProgressiveSelfForcingTrainingPipeline
 import torch.nn.functional as F
 from typing import Optional, Tuple
 import torch
@@ -6,7 +7,12 @@ import torch
 from model.base import SelfForcingModel
 
 
-class DMD(SelfForcingModel):
+"""
+11/12/2025: added the first_window dmd loss logic for first_window_dmd_loss
+"""
+
+
+class ProgressiveDMD(SelfForcingModel):
     def __init__(self, args, device):
         """
         Initialize the DMD (Distribution Matching Distillation) module.
@@ -29,7 +35,8 @@ class DMD(SelfForcingModel):
             self.fake_score.enable_gradient_checkpointing()
 
         # this will be init later with fsdp-wrapped modules
-        self.inference_pipeline: SelfForcingTrainingPipeline = None
+        self.inference_pipeline: ProgressiveSelfForcingTrainingPipeline = None
+        # self.inference_pipeline: SelfForcingTrainingPipeline = None
 
         # Step 2: Initialize all dmd hyperparameters
         self.num_train_timestep = args.num_train_timestep
@@ -51,6 +58,25 @@ class DMD(SelfForcingModel):
         else:
             self.scheduler.alphas_cumprod = None
 
+
+
+        self.using_first_window_loss = getattr(args, "using_first_window_loss", False)
+        self.first_window_loss_method = getattr(args, "first_window_loss_method", '')
+        if self.using_first_window_loss and self.first_window_loss_method=='lpips':
+            # lpips needs to decode to video into pixel form
+            import lpips
+            self.loss_fn_vgg = lpips.LPIPS(net='vgg')
+
+            from utils.wan_wrapper import WanVAE    
+            self.vae = WanVAE()
+        
+        else:
+            # strengthen the signal of dmd, from first chunk
+            self.first_window_loss =  getattr(args, "first_window_loss", 1.0)
+            self.first_window_loss_method = getattr(args, "first_window_loss_method", 
+                                                        'normalized_inverted_first_window_size')
+
+
     def _compute_kl_grad(
         self, noisy_image_or_video: torch.Tensor,
         estimated_clean_image_or_video: torch.Tensor,
@@ -59,6 +85,9 @@ class DMD(SelfForcingModel):
         normalization: bool = True
     ) -> Tuple[torch.Tensor, dict]:
         """
+        Uses the fake and real score models to denoise, and returns the grad diff.
+
+
         Compute the KL grad (eq 7 in https://arxiv.org/abs/2311.18828).
         Input:
             - noisy_image_or_video: a tensor with shape [B, F, C, H, W] where the number of frame is 1 for images.
@@ -135,6 +164,9 @@ class DMD(SelfForcingModel):
         denoised_timestep_to: int = 0
     ) -> Tuple[torch.Tensor, dict]:
         """
+        Calculates DMD loss by calling _compute_kl_grad() on a stochastically noise timestep for the noise
+        
+
         Compute the DMD loss (eq 7 in https://arxiv.org/abs/2311.18828).
         Input:
             - image_or_video: a tensor with shape [B, F, C, H, W] where the number of frame is 1 for images.
@@ -146,6 +178,9 @@ class DMD(SelfForcingModel):
             - dmd_log_dict: a dictionary containing the intermediate tensors for logging.
         """
         original_latent = image_or_video
+
+        # john: see if the Nan loss comes from the latent itself
+        assert not torch.isnan(original_latent.double()).any().item(), "Error: original_latent has Nan"
 
         batch_size, num_frame = image_or_video.shape[:2]
 
@@ -185,13 +220,86 @@ class DMD(SelfForcingModel):
                 unconditional_dict=unconditional_dict
             )
 
+            
+        # john: see if the Nan loss comes from the latent itself
+        assert not torch.isnan((original_latent.double() - grad.double()).detach()).any().item(), "Error: original_latent-grad has Nan"
+        
         if gradient_mask is not None:
             dmd_loss = 0.5 * F.mse_loss(original_latent.double(
             )[gradient_mask], (original_latent.double() - grad.double()).detach()[gradient_mask], reduction="mean")
         else:
             dmd_loss = 0.5 * F.mse_loss(original_latent.double(
             ), (original_latent.double() - grad.double()).detach(), reduction="mean")
+
+
+        # add in bonus first chunk loss
+
+        if self.using_first_window_loss:
+            
+            # generate mask for first_window_loss
+            first_window_gradient_mask = torch.ones_like(noisy_latent, dtype=torch.bool)
+            chunks_for_first_window = self.inference_pipeline.first_window_size * self.inference_pipeline.num_frame_per_block
+            first_window_gradient_mask[:, chunks_for_first_window:] = False
+
+            first_window_loss = self.first_window_dmd_loss_rules(first_window_gradient_mask,
+                                                               original_latent,
+                                                               grad)
+                    
+            first_window_log_dict = {
+                    "first_window_dmdtrain_gradient_norm": torch.mean(torch.abs(grad[first_window_gradient_mask].detach()))
+            }
+                        
+            return dmd_loss, dmd_log_dict, first_window_loss, first_window_log_dict
+                        
+
         return dmd_loss, dmd_log_dict
+
+
+
+    def first_window_dmd_loss_rules(self, 
+                                   gradient_mask, 
+                                   original_latent, 
+                                   grad):
+        """
+        Applies a gradient mask over the DMD loss formula for the first chunk to match the the distribution of the
+        teacher model more.
+
+        Implements some method so that, ideally, when self.pipeline.first_window_size=21 (the max), it is the same as
+        just normal DMD, and only takes affect when first_window_size shrinks.
+
+        """
+
+        loss_coeffcient_factor = 1
+        max_first_window_window_size = original_latent.shape[1] # get the # of latent frames from latent
+        current_first_window_window_size = self.inference_pipeline.first_window_size * self.inference_pipeline.num_frame_per_block
+        
+        match self.first_window_loss_method:
+            case 'normalized_inverted_first_window_size':
+                loss_coeffcient_factor = (max_first_window_window_size - current_first_window_window_size) / max_first_window_window_size
+
+            case 'lpips':
+                NotImplementedError(f"{self.first_window_loss_method} is not implemented")
+                
+            case _:
+                NotImplementedError(f"{self.first_window_loss_method} is not implemented")
+
+
+        print("=========== CALCULATE WINDOW LOSS =====================")
+        print(f"loss coefficient: {loss_coeffcient_factor}")
+        
+        first_window_dmd_loss = 0.5 * F.mse_loss(original_latent.double()[gradient_mask], 
+                                    (original_latent.double() - grad.double()).detach()[gradient_mask], 
+                                    reduction="mean")
+        
+        print(f"first_window_dmd_loss: {first_window_dmd_loss}")
+        
+        # import ipdb;ipdb.set_trace()
+        print("=========== DONE CALCULATE WINDOW LOSS =====================")
+        
+
+        return loss_coeffcient_factor * first_window_dmd_loss
+
+
 
     def generator_loss(
         self,
@@ -200,7 +308,7 @@ class DMD(SelfForcingModel):
         unconditional_dict: dict,
         clean_latent: torch.Tensor,
         initial_latent: torch.Tensor = None
-    ) -> Tuple[torch.Tensor, dict]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
         """
         Generate image/videos from noise and compute the DMD loss.
         The noisy input to the generator is backward simulated.
@@ -221,9 +329,9 @@ class DMD(SelfForcingModel):
             conditional_dict=conditional_dict,
             initial_latent=initial_latent
         )
-        
+
         # Step 2: Compute the DMD loss
-        dmd_loss, dmd_log_dict = self.compute_distribution_matching_loss(
+        dmd_loss, dmd_log_dict, first_window_dmd_loss, first_window_log_dict  = self.compute_distribution_matching_loss(
             image_or_video=pred_image,
             conditional_dict=conditional_dict,
             unconditional_dict=unconditional_dict,
@@ -231,11 +339,13 @@ class DMD(SelfForcingModel):
             denoised_timestep_from=denoised_timestep_from,
             denoised_timestep_to=denoised_timestep_to
         )
+
+        dmd_original_loss = dmd_loss.clone().detach()
+        dmd_loss = dmd_loss + first_window_dmd_loss
+        dmd_log_dict.update(first_window_log_dict)
         
-        assert not torch.isnan(dmd_loss.double()).any().item(), "Error: dmd_loss has Nan"
 
-
-        return dmd_loss, dmd_log_dict
+        return dmd_loss, dmd_original_loss, first_window_dmd_loss, dmd_log_dict
 
     def critic_loss(
         self,

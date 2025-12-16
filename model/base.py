@@ -1,3 +1,7 @@
+"""
+Updated SelfForcingModel._initialize_inference_pipeline() in order to use ProgressiveSelfForcingTrainingPipeline conditionally
+based on if we have self.args.distribution_loss == "progressive_dmd"
+"""
 from typing import Tuple
 from einops import rearrange
 from torch import nn
@@ -5,6 +9,8 @@ import torch.distributed as dist
 import torch
 
 from pipeline import SelfForcingTrainingPipeline
+from pipeline.progressive_self_forcing_training import ProgressiveSelfForcingTrainingPipeline
+
 from utils.loss import get_denoising_loss
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder, WanVAEWrapper
 
@@ -209,14 +215,33 @@ class SelfForcingModel(BaseModel):
         Here we encapsulate the inference code with a model-dependent outside function.
         We pass our FSDP-wrapped modules into the pipeline to save memory.
         """
-        self.inference_pipeline = SelfForcingTrainingPipeline(
-            denoising_step_list=self.denoising_step_list,
-            scheduler=self.scheduler,
-            generator=self.generator,
-            num_frame_per_block=self.num_frame_per_block,
-            independent_first_frame=self.args.independent_first_frame,
-            same_step_across_blocks=self.args.same_step_across_blocks,
-            last_step_only=self.args.last_step_only,
-            num_max_frames=self.num_training_frames,
-            context_noise=self.args.context_noise
-        )
+
+        if self.args.distribution_loss == "progressive_dmd":
+            self.inference_pipeline = ProgressiveSelfForcingTrainingPipeline(
+                denoising_step_list=self.denoising_step_list,
+                scheduler=self.scheduler,
+                generator=self.generator,
+                num_frame_per_block=self.num_frame_per_block,
+                independent_first_frame=self.args.independent_first_frame,
+                same_step_across_blocks=self.args.same_step_across_blocks,
+                last_step_only=self.args.last_step_only,
+                num_max_frames=self.num_training_frames,
+                context_noise=self.args.context_noise,
+                progressive_enabled=True # new param, default is True
+            )
+            
+        else:
+            self.inference_pipeline = SelfForcingTrainingPipeline(
+                denoising_step_list=self.denoising_step_list,
+                scheduler=self.scheduler,
+                generator=self.generator,
+                num_frame_per_block=self.num_frame_per_block,
+                independent_first_frame=self.args.independent_first_frame,
+                same_step_across_blocks=self.args.same_step_across_blocks,
+                last_step_only=self.args.last_step_only,
+                num_max_frames=self.num_training_frames,
+                context_noise=self.args.context_noise
+            )
+
+            print("\n\n=================== WARNING: you are using the SelfForcingTrainingPipeline instead of ProgressiveSelfForcingTrainingPipeline in this" \
+            "repository, ensure that this is what you want to run!! =================== \n\n")

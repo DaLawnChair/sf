@@ -103,8 +103,8 @@ fi
 
 NNODES=1
 
-instance_folder_name="progressive_naiive2"
-config_name="progressive_naiive.yaml"
+instance_folder_name="self_forcing_dmd_recreate_grad_acc8"
+config_name="self_forcing_dmd_recreate_grad_acc8.yaml"
 
 torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
   --rdzv_backend=c10d \
