@@ -1,6 +1,6 @@
 """ 
 not many changes, adding self.progressive_enabled to represent if the progression and 
-self.first_window_size, the # of chunks that the will be denoised togheter as the prior.
+self.first_window_size, the # of chunks that the will be denoised togheter as the prior
 
 """
 from utils.wan_wrapper import WanDiffusionWrapper
@@ -18,10 +18,10 @@ class ProgressiveSelfForcingTrainingPipeline:
                  num_frame_per_block=3,
                  independent_first_frame: bool = False,
                  same_step_across_blocks: bool = False,
-                 last_step_only: bool = False,
+                 last_step_only: bool = True, # john: for testing, set this to true, from False
                  num_max_frames: int = 21,
                  context_noise: int = 0,
-                 progressive_enabled: bool = True,
+                 progressive_enabled: bool = False,
                  **kwargs):
         super().__init__()
         self.scheduler = scheduler
@@ -47,8 +47,8 @@ class ProgressiveSelfForcingTrainingPipeline:
         self.progressive_enabled = progressive_enabled
         self.first_window_size = 1
         if self.progressive_enabled:
-            self.first_window_size = 7 #default is 7 blocks, and initialization is all available blocks
-
+            # self.first_window_size = 7 #default is 7 blocks, and initialization is all available blocks
+            self.first_window_size = 7
 
     def generate_and_sync_list(self, num_blocks, num_denoising_steps, device):
         rank = dist.get_rank() if dist.is_initialized() else 0
@@ -105,29 +105,7 @@ class ProgressiveSelfForcingTrainingPipeline:
         self._initialize_crossattn_cache(
             batch_size=batch_size, dtype=noise.dtype, device=noise.device
         )
-        # if self.kv_cache1 is None:
-        #     self._initialize_kv_cache(
-        #         batch_size=batch_size,
-        #         dtype=noise.dtype,
-        #         device=noise.device,
-        #     )
-        #     self._initialize_crossattn_cache(
-        #         batch_size=batch_size,
-        #         dtype=noise.dtype,
-        #         device=noise.device
-        #     )
-        # else:
-        #     # reset cross attn cache
-        #     for block_index in range(self.num_transformer_blocks):
-        #         self.crossattn_cache[block_index]["is_init"] = False
-        #     # reset kv cache
-        #     for block_index in range(len(self.kv_cache1)):
-        #         self.kv_cache1[block_index]["global_end_index"] = torch.tensor(
-        #             [0], dtype=torch.long, device=noise.device)
-        #         self.kv_cache1[block_index]["local_end_index"] = torch.tensor(
-        #             [0], dtype=torch.long, device=noise.device)
-
-
+        
         ## john: ignoring this for now, do think this is used
         # Step 2: Cache context feature
         current_start_frame = 0
@@ -154,19 +132,18 @@ class ProgressiveSelfForcingTrainingPipeline:
 
         if self.progressive_enabled:
             all_num_frames[0] = self.first_window_size*self.num_frame_per_block
-        
-        print(f"progressive_enabled: {self.progressive_enabled}")
-        print(f"all_num_frames: {all_num_frames}")
 
         num_denoising_steps = len(self.denoising_step_list)
         exit_flags = self.generate_and_sync_list(len(all_num_frames), num_denoising_steps, device=noise.device)
         start_gradient_frame_index = num_output_frames - 21
+        
+        print(f"all_num_frames: {all_num_frames}")
 
         # for block_index in range(num_blocks):
         for block_index, current_num_frames in enumerate(all_num_frames):
             noisy_input = noise[
                 :, current_start_frame - num_input_frames:current_start_frame + current_num_frames - num_input_frames]
-
+            
             # Step 3.1: Spatial denoising loop
             for index, current_timestep in enumerate(self.denoising_step_list):
                 if self.same_step_across_blocks:
@@ -188,6 +165,8 @@ class ProgressiveSelfForcingTrainingPipeline:
                             crossattn_cache=self.crossattn_cache,
                             current_start=current_start_frame * self.frame_seq_length
                         )
+                        assert not torch.isnan(denoised_pred).any().item(), f"nan on block_index={block_index}, STEP={current_timestep} of the output"
+                        
                         next_timestep = self.denoising_step_list[index + 1]
                         noisy_input = self.scheduler.add_noise(
                             denoised_pred.flatten(0, 1),
@@ -221,6 +200,8 @@ class ProgressiveSelfForcingTrainingPipeline:
 
             # Step 3.2: record the model's output
             output[:, current_start_frame:current_start_frame + current_num_frames] = denoised_pred
+            
+            assert not torch.isnan(output).any().item(), f"nan on block_index={block_index} of the output"
 
             # Step 3.3: rerun with timestep zero to update the cache
             context_timestep = torch.ones_like(timestep) * self.context_noise
