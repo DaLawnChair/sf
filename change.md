@@ -55,10 +55,16 @@ branch: add in grad accumulation
 15/12/2025:
 branch: (progressive_naive) add progressive distillation methods, at least naiive ones:
 * this updates a lot of the codebase in order to implement an idea of "large window for w1 early, progressively shrink w1 for causality later" namely:
-    * trainer/progressive_distillation.py
+   dwdawdwadwadwad * trainer/progressive_distillation.py
     * pipeline/progressive_self_forcing_training.py
     * model/progressive_dmd.py
 * supporting changes across the board are required for the added method.
 * this is built of of the 091225_add_grad_acc_temp repo, which is a pretty stable branch, as the trainning works, not sure about how well it works though.
 * added some assert not torch.isnan() to check that there is no nan values generated for the latent or loss
 
+* fix some stuff for video generation, as prior attempts were bad. `make_video_latents.sh` achieves this, other attempts were bad, albeit slowly on webstudio (10 minutes a video, even with flash_attn versus 3 minutes with standard wan that yielded worse output)
+* add in a video dataset loader that will load in (noise, latent, prompt) triplets. 
+    * added into utils/dataset.py as VideoRegressionShardingLMDBDataset
+    * added in create_lmdb_shards_video.py to convert .pt files of the generated triplets into a lmdb dataset
+    * updated utils/lmdb.py for versions that will handle video and noise
+    * added a small test file test_lmdb_video_loading.py so we can quickly verify that it works interactively

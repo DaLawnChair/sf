@@ -1,4 +1,4 @@
-from utils.lmdb import get_array_shape_from_lmdb, retrieve_row_from_lmdb
+from utils.lmdb import get_array_shape_from_lmdb, retrieve_row_from_video_lmdb, process_data_dict_videos, store_video_arrays_to_lmdb
 from torch.utils.data import Dataset
 import numpy as np
 import torch
@@ -7,6 +7,77 @@ import json
 from pathlib import Path
 from PIL import Image
 import os
+
+
+# custom model, for regression loss term:
+
+class VideoRegressionShardingLMDBDataset(Dataset):
+    def __init__(self, data_path: str, max_pair: int = int(1e8)):
+        self.envs = []
+        self.index = []
+
+        for fname in sorted(os.listdir(data_path)):
+            path = os.path.join(data_path, fname)
+            env = lmdb.open(path,
+                            readonly=True,
+                            lock=False,
+                            readahead=False,
+                            meminit=False)
+            self.envs.append(env)
+
+        self.video_shape = [None] * len(self.envs)
+        self.noise_shape = [None] * len(self.envs)
+        for shard_id, env in enumerate(self.envs):
+            self.video_shape[shard_id] = get_array_shape_from_lmdb(env, 'video')
+            self.noise_shape[shard_id] = get_array_shape_from_lmdb(env, 'noise')
+            
+            for local_i in range(self.video_shape[shard_id][0]):
+                self.index.append((shard_id, local_i))
+
+            # print("shard_id ", shard_id, " local_i ", local_i)
+
+        self.max_pair = max_pair
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, idx):
+        """
+            Outputs:
+                - prompts: List of Strings
+                - latents: Tensor of shape (num_denoising_steps, num_frames, num_channels, height, width). It is ordered from pure noise to clean image.
+        """
+        shard_id, local_idx = self.index[idx]
+
+        video = retrieve_row_from_video_lmdb(
+            self.envs[shard_id],
+            "video", np.float16, local_idx,
+            shape=self.video_shape[shard_id][1:]
+        )
+        
+        noise = retrieve_row_from_video_lmdb(
+            self.envs[shard_id],
+            "noise", np.float16, local_idx,
+            shape=self.noise_shape[shard_id][1:]
+        )
+
+        if len(video.shape) == 4: # adds a dim 0 in front
+            video = video[None, ...]
+        if len(noise.shape) == 4: # adds a dim 0 in front
+            noise = noise[None, ...]
+            
+        prompts = retrieve_row_from_video_lmdb(
+            self.envs[shard_id],
+            "prompts", str, local_idx
+        )
+
+        return {
+            "prompt": prompts,
+            "video": torch.tensor(video, dtype=torch.float32),
+            "noise": torch.tensor(noise, dtype=torch.float32),
+        }
+    
+    
 
 
 class TextDataset(Dataset):
