@@ -8,9 +8,7 @@
 """
 This is a clone of the create_lmdb_14b_shards.py file, but for videos.
 
-python create_lmdb_14b_shards_video.py \
---data_path /home/ma-user/work/dataset/self_forcing/self_forcing/temp_video_dataset \
---lmdb_path /home/ma-user/work/dataset/self_forcing/self_forcing/lmdb_temp_video_dataset
+python create_lmdb_14b_shards_video.py --data_path /home/ma-user/work/dataset/self_forcing/self_forcing/temp_video_dataset --lmdb_path /home/ma-user/work/dataset/self_forcing/self_forcing/lmdb_temp_video_dataset
 """
 
 import sys

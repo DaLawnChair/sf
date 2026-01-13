@@ -15,6 +15,8 @@ import gc
 import logging
 
 from utils.dataset import ShardingLMDBDataset, cycle
+from utils.dataset import VideoRegressionShardingLMDBDataset
+
 from utils.dataset import TextDataset
 from utils.distributed import EMA_FSDP, fsdp_wrap, fsdp_state_dict, launch_distributed_job
 from utils.misc import (
@@ -61,8 +63,7 @@ class Trainer:
 
         if self.is_main_process:
             print(f"Gradient accumulation steps: {self.gradient_accumulation_steps}")   
-            if self.gradient_accumulation_steps > 1:
-                print(f"Effective batch size: {config.batch_size * self.gradient_accumulation_steps * self.world_size}")
+            print(f"Effective batch size: {config.batch_size * self.gradient_accumulation_steps * self.world_size}")
 
         # if self.is_main_process and not self.disable_wandb:
         #     wandb.login(host=config.wandb_host, key=config.wandb_key)
@@ -167,10 +168,24 @@ class Trainer:
             batch_size=config.batch_size,
             sampler=sampler,
             num_workers=8)
+        
+        # Step 3a. Initalize the video dataloader
+        reg_dataset = VideoRegressionShardingLMDBDataset(config.regression_data_path, max_pair=int(1e8))
+        reg_sampler = torch.utils.data.distributed.DistributedSampler(
+            reg_dataset, shuffle=True, drop_last=True)
+        reg_dataloader = torch.utils.data.DataLoader(
+            reg_dataset,
+            batch_size=config.batch_size,
+            sampler=reg_sampler,
+            num_workers=8)
+        
 
         if dist.get_rank() == 0:
             print("DATASET SIZE %d" % len(dataset))
+            print("REGRESSION DATASET SIZE %d" % len(reg_dataset))
+            
         self.dataloader = cycle(dataloader)
+        self.reg_dataloader = cycle(reg_dataloader)
 
         ##############################################################################################################
         # 6. Set up EMA parameter containers
@@ -214,6 +229,12 @@ class Trainer:
         self.max_grad_norm_generator = getattr(config, "max_grad_norm_generator", 10.0)
         self.max_grad_norm_critic = getattr(config, "max_grad_norm_critic", 10.0)
         self.previous_time = None
+        
+        
+        # clear unused values before training
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
     def resetEMA(self):
@@ -253,7 +274,7 @@ class Trainer:
 
 
 
-    def fwdbwd_one_step(self, batch, train_generator):
+    def fwdbwd_one_step(self, batch, train_generator, reg_batch=None):
         """ 
         John: same as self-forcing, but add in grad accumulation when performing loss.backwards(). Reported result is still without grad accumulation.
 
@@ -292,28 +313,52 @@ class Trainer:
             else:
                 unconditional_dict = self.unconditional_dict
 
+        regression_info={}
+        if reg_batch:
+            if self.is_main_process:
+                print("========= VIEW BATCHES =========")
+                print(reg_batch["prompt"])
+                print(batch["prompts"])
+                print("========= DONE VIEW BATCHES =========")
+
+            regression_info["reg_conditional_dict"] = self.model.text_encoder(
+                text_prompts=reg_batch["prompt"])
+            regression_info["noise_latents"] = reg_batch["noise"]
+            regression_info["cleaned_video_pixels"] = reg_batch["video"]
+        
+            
+                
         # Step 3: Store gradients for the generator (if training the generator)
         if train_generator:
-            generator_loss, dmd_original_loss, first_window_loss, generator_log_dict = self.model.generator_loss(
+            generator_loss_dict, generator_log_dict = self.model.generator_loss(
                 image_or_video_shape=image_or_video_shape,
                 conditional_dict=conditional_dict,
                 unconditional_dict=unconditional_dict,
                 clean_latent=clean_latent,
-                initial_latent=image_latent if self.config.i2v else None
+                initial_latent=image_latent if self.config.i2v else None,
+                regression_info=regression_info
             )
 
-            scaled_generator_loss = generator_loss / self.gradient_accumulation_steps  # john: scale loss for grad accumulation
+            scaled_generator_loss = generator_loss_dict['generator_loss'] / self.gradient_accumulation_steps  # john: scale loss for grad accumulation
             scaled_generator_loss.backward()
+            
+            for k,v in generator_loss_dict.items():
+                if torch.is_tensor(v):
+                    generator_loss_dict[k] = v.detach()
+            scaled_generator_loss = scaled_generator_loss.detach()
+            
+            
             # generator_grad_norm = self.model.generator.clip_grad_norm_(
             #     self.max_grad_norm_generator)
 
             # generator_log_dict.update({"generator_loss": generator_loss, # keep original
             #                            "generator_grad_norm": generator_grad_norm})
 
-            generator_log_dict.update({"generator_loss": generator_loss, # keep original,
-                                        "dmd_original_loss": dmd_original_loss, 
-                                        "first_window_loss": first_window_loss,
-                                        "generator_grad_norm": torch.tensor(0.0, device=self.device)}) # clip performed after accumulation
+            generator_log_dict.update(generator_loss_dict)
+            generator_log_dict.update({
+                "generator_grad_norm": torch.tensor(0.0, device=self.device)
+            }) # clip performed after accumulation
+            
             return generator_log_dict
         else:
             generator_log_dict = {}
@@ -328,6 +373,10 @@ class Trainer:
         )
         scaled_critic_loss = critic_loss / self.gradient_accumulation_steps  # john: scale loss for grad accumulation
         scaled_critic_loss.backward()
+        
+        scaled_critic_loss = scaled_critic_loss.detach() # see if this does anything, likely not
+        critic_loss = critic_loss.detach() # see if this does anything, likely not
+        
         # critic_grad_norm = self.model.fake_score.clip_grad_norm_(
         #     self.max_grad_norm_critic)
         # critic_log_dict.update({"critic_loss": critic_loss, # log original loss
@@ -370,9 +419,19 @@ class Trainer:
         start_step = self.step
         # reset_ema_next_step = False
 
+        history_of_first_window_reg_loss = []
+        stored_variances = []
+        
+        w1_change_probability = 0
+        
+        if self.model.inference_pipeline is None:
+            self.model._initialize_inference_pipeline()
+        w1_old = self.model.inference_pipeline.first_window_size
+        w1_new = w1_old - 1
+        
         while True:
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
-            
+
             if TRAIN_GENERATOR:
                 self.generator_optimizer.zero_grad(set_to_none=True)
             self.critic_optimizer.zero_grad(set_to_none=True)
@@ -384,9 +443,24 @@ class Trainer:
                 print(f"======== On accumulation_step: {accumulation_step+1} ========")
                 batch = next(self.dataloader)
                 if TRAIN_GENERATOR:
-                    extra_gen = self.fwdbwd_one_step(batch, True)
+                    reg_batch = next(self.reg_dataloader)
+                    extra_gen = self.fwdbwd_one_step(batch, True, reg_batch=reg_batch)
                     print("done generator generation")
                     accumulated_generator_logs.append(extra_gen)
+                    
+                    for k,v in extra_gen.items():
+                        if torch.is_tensor(v):
+                            print(f"{k}: {v}, {v.device}, {v.numel()}, {v.requires_grad}")
+                        else:
+                            print(f"{k}: {v}")
+
+                    if self.generator_ema is not None:
+                        self.generator_ema.update(self.model.generator)
+                    import gc
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    
+                    
 
                 extra_crit = self.fwdbwd_one_step(batch, False)
                 print("done critic generation")
@@ -401,7 +475,7 @@ class Trainer:
                 self.generator_optimizer.step()
                 if self.generator_ema is not None:
                     self.generator_ema.update(self.model.generator)
-                    
+
                 print("done generator step")
             else:
                 generator_log_dict = {}
@@ -413,17 +487,35 @@ class Trainer:
             self.critic_optimizer.step()
             print("done critic step")
 
+                                              
+                
             # Increment the step since we finished gradient update
             self.step += 1
-            
-            
-            # stop training if loss is NaN
-            if "generator_loss" in generator_log_dict and "first_window_loss" in generator_log_dict:
-                generator_loss_is_nan = generator_log_dict["generator_loss"].mean().item() is torch.nan
-                first_window_loss_is_nan = generator_log_dict["first_window_loss"].mean().item() is torch.nan
-                if generator_loss_is_nan or first_window_loss_is_nan:
-                    wandb.log(
-                        {"ERROR":f"Nan in loss. generator_loss_is_nan={generator_loss_is_nan}, first_window_loss_is_nan={first_window_loss_is_nan}"}, step=self.step)
+
+            # probabilitically choose the w1 size according to the trend of reducing variance
+            if generator_log_dict and first_window_reg_loss := generator_log_dict['first_window_dmd_reg_loss'].mean().item() != 0:
+                history_of_first_window_reg_loss.append(first_window_reg_loss)
+                
+                curr_variance = torch.var(torch.tensor(history_of_first_window_reg_loss[-4:]))
+                stored_variances.append(curr_variance)
+                if len(stored_variances)>=5 and torch.mean(torch.tensor(stored_variances[-5:-1])) < curr_variance:
+                    w1_change_probability += 0.2
+                    
+                    if w1_change_probability > 1:
+                        w1_new = min(w1_new-1,1)
+                        w1_old = min(w1_old-1,1)
+                        stored_variances = [] # have at least 5 steps buffer that are dedicated to the new regimen
+       
+                    # policy is to randomly set this value for every model
+                    import random 
+                    self.model.inference_pipeline.first_window_size = random.choices([w1_old, w1_new], [1-w1_change_probability, w1_change_probability])[0]
+            ## stop training if loss is NaN
+            # if "generator_loss" in generator_log_dict and "first_window_loss" in generator_log_dict:
+            #     generator_loss_is_nan = generator_log_dict["generator_loss"].mean().item() is torch.nan
+            #     first_window_loss_is_nan = generator_log_dict["first_window_loss"].mean().item() is torch.nan
+            #     if generator_loss_is_nan or first_window_loss_is_nan:
+            #         wandb.log(
+            #             {"ERROR":f"Nan in loss. generator_loss_is_nan={generator_loss_is_nan}, first_window_loss_is_nan={first_window_loss_is_nan}"}, step=self.step)
                     # break
 
             # Create EMA params (if not already created)
@@ -439,7 +531,7 @@ class Trainer:
 
             
             # john: update the first_window_size if loss achieves below a threshold
-            GENERATOR_LOSS_THRESHOLD = 0.175
+            # GENERATOR_LOSS_THRESHOLD = 0.175
 #             if reset_ema_next_step: # reset the turn after to have the 
 #                 self.resetEMA() # should reset as prior averages are of a different window size
 #                 reset_ema_next_step = False
@@ -456,26 +548,35 @@ class Trainer:
                 wandb_loss_dict = {}
                 if TRAIN_GENERATOR:
                     update_dict = {
-                            "generator_loss": generator_log_dict["generator_loss"].mean().item(),
-                            "first_window_size": self.model.inference_pipeline.first_window_size, 
-                            "dmd_original_loss": generator_log_dict["dmd_original_loss"].mean().item(),
-                            "first_window_loss": generator_log_dict["first_window_loss"].mean().item(),
-                            "generator_grad_norm": generator_log_dict["generator_grad_norm"].mean().item(),
-                            "dmdtrain_gradient_norm": generator_log_dict["dmdtrain_gradient_norm"].mean().item()
+                            k:(v.mean().item() if torch.is_tensor(v) else v) for k,v in generator_log_dict.items() 
                         }
-                    for key,value in update_dict.items():
-                        print(f"{key}: {value}")
+                    # update_dict["first_window_size"] = self.model.inference_pipeline.first_window_size
+                    
                     
                     wandb_loss_dict.update(
                         update_dict
                     )
-
+                    
+                    print(" ++++ VIEW just before saving ++++ ")
+                    for key,value in update_dict.items():
+                        print(f"{key}: {value}:")
+                        if torch.is_tensor(value):
+                            print(f"{key}: {value} {value.device}")
+                        else:
+                            print(f"{key}: {value}")
+                                  
+                        
+                    
                 wandb_loss_dict.update(
                     {
                         "critic_loss": critic_log_dict["critic_loss"].mean().item(),
                         "critic_grad_norm": critic_log_dict["critic_grad_norm"].mean().item()
                     }
                 )
+                
+                # del critic_log_dict
+                # del generator_log_dict
+                
 
                 if not self.disable_wandb:
                     wandb.log(wandb_loss_dict, step=self.step)

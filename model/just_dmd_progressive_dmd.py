@@ -7,11 +7,8 @@ import torch
 from model.base import SelfForcingModel
 
 
-
-
 """
 11/12/2025: added the first_window dmd loss logic for first_window_dmd_loss
-19/12/2025: adding regression to it, and cleaning things up
 """
 
 
@@ -64,28 +61,21 @@ class ProgressiveDMD(SelfForcingModel):
 
 
         self.using_first_window_loss = getattr(args, "using_first_window_loss", False)
-        self.use_dmd_regression_loss =  getattr(args, "use_dmd_regression_loss", False)
-        self.use_first_window_dmd_regression_loss =  getattr(args, "use_first_window_dmd_regression_loss", False)
-        
-        
-        self.first_window_loss_scale_scheduler = getattr(args, "first_window_loss_scale_scheduler", 'use_1')
-        
-        self.first_window_reg_loss_method = getattr(args, "first_window_reg_loss_method", 'lpips')
-        self.reg_loss_coefficient =  getattr(args, "reg_loss_coefficient", 1.0)
-        
-        self.device = device
-
-
-        
-        
-        # need to load in LPIPS if doing regression loss
-        if (self.using_first_window_loss and self.first_window_reg_loss_method=='lpips') or self.use_dmd_regression_loss or self.use_first_window_dmd_regression_loss:
+        self.first_window_loss_method = getattr(args, "first_window_loss_method", '')
+        if self.using_first_window_loss and self.first_window_loss_method=='lpips':
             # lpips needs to decode to video into pixel form
             import lpips
-            self.loss_fn_vgg = lpips.LPIPS(net='vgg').to(device).to(torch.bfloat16)
-            self.loss_fn_vgg.requires_grad_(False)
-            
-            
+            self.loss_fn_vgg = lpips.LPIPS(net='vgg')
+
+            from utils.wan_wrapper import WanVAE    
+            self.vae = WanVAE()
+        
+        else:
+            # strengthen the signal of dmd, from first chunk
+            self.first_window_loss =  getattr(args, "first_window_loss", 1.0)
+            self.first_window_loss_method = getattr(args, "first_window_loss_method", 
+                                                        'normalized_inverted_first_window_size')
+
 
     def _compute_kl_grad(
         self, noisy_image_or_video: torch.Tensor,
@@ -242,113 +232,72 @@ class ProgressiveDMD(SelfForcingModel):
             ), (original_latent.double() - grad.double()).detach(), reduction="mean")
 
 
-        first_window_loss_scale = self.first_window_loss_scale()
-        # add in dmd first chunk loss. only perform this if doing dmd loss
+        # add in bonus first chunk loss
+
         if self.using_first_window_loss:
-    
-            first_window_dmd_loss = 0.5 * F.mse_loss(original_latent.double()[self.first_window_mask], 
-                                        (original_latent.double() - grad.double()).detach()[self.first_window_mask], 
-                                        reduction="mean")
+            
+            # generate mask for first_window_loss
+            first_window_gradient_mask = torch.ones_like(noisy_latent, dtype=torch.bool)
+            chunks_for_first_window = self.inference_pipeline.first_window_size * self.inference_pipeline.num_frame_per_block
+            first_window_gradient_mask[:, chunks_for_first_window:] = False
+
+            first_window_loss = self.first_window_dmd_loss_rules(first_window_gradient_mask,
+                                                               original_latent,
+                                                               grad)
                     
             first_window_log_dict = {
-                    "first_window_dmdtrain_gradient_norm": torch.mean(torch.abs(grad[self.first_window_mask].detach()))
+                    "first_window_dmdtrain_gradient_norm": torch.mean(torch.abs(grad[first_window_gradient_mask].detach()))
             }
-        else:
-            first_window_loss = 0
-            first_window_log_dict = {}
                         
-                
-        dmd_loss_info = {
-            "dmd_loss": dmd_loss,
-            "first_window_dmd_loss": first_window_dmd_loss,
-            "first_window_loss_scale": first_window_loss_scale
-        }
-        
-        dmd_log_dict.update(first_window_log_dict)
-        return dmd_loss_info, dmd_log_dict
+            return dmd_loss, dmd_log_dict, first_window_loss, first_window_log_dict
                         
 
-    
-    def set_first_window_mask(self, noise_shape):
-        if self.inference_pipeline is None:
-            self._initialize_inference_pipeline()
-        first_window_gradient_mask = torch.ones(noise_shape, dtype=torch.bool)
-        chunks_for_first_window = self.inference_pipeline.first_window_size * self.inference_pipeline.num_frame_per_block
-        first_window_gradient_mask[:, chunks_for_first_window:] = False
-        
-        self.first_window_mask = first_window_gradient_mask
-        self.chunks_for_first_window = chunks_for_first_window 
-    
-    def calculate_lpips_loss(self, 
-                            cleaned_video_pixels: torch.tensor, 
-                            noise_latents: torch.tensor,
-                            conditional_dict: dict
-                            ):
+        return dmd_loss, dmd_log_dict
+
+
+
+    def first_window_dmd_loss_rules(self, 
+                                   gradient_mask, 
+                                   original_latent, 
+                                   grad):
         """
-        Applies lpips regression loss similar to the one inside of DMD.
-        Returns a torch stack of the per-frame LPIPS values
-        """
-        
-        noise_latents = noise_latents.squeeze(0).to(torch.bfloat16).detach().to(self.device)
-        cleaned_video_pixels = cleaned_video_pixels.squeeze(0).to(torch.bfloat16).to(self.device)
-        
-        
-        if not self.use_dmd_regression_loss or not self.using_first_window_loss:
-            with torch.no_grad():
-                generated_video_latents = self.inference_pipeline.inference(
-                    noise=noise_latents,
-                    **conditional_dict,
-                )
-        else:
-            generated_video_latents = self.inference_pipeline.inference(
-                    noise=noise_latents,
-                    **conditional_dict,
-                )
-
-        
-        # video shape [1, 81, 3, 480, 832]
-        with torch.no_grad():
-            generated_video_pixels = self.vae.decode_to_pixel(generated_video_latents).to(torch.bfloat16)
-        
-            # generated_video_pixels = generated_video_pixels.permute() # need to permute to the same shape, that is compatible with lpips
-
-            # should be torch.Size([1, 81, 480, 832, 3])
-            cleaned_video_pixels = cleaned_video_pixels.permute(0,1,4,2,3) # need to permute to the same shape, that is compatible with lpips
-
-            assert cleaned_video_pixels.shape == generated_video_pixels.shape, f"Error: generated video pixel shape {generated_video_pixels.shape} != cleaned_video_pixels.shape {cleaned_video_pixels.shape}"
-
-
-        if not self.use_dmd_regression_loss or not self.using_first_window_loss:
-            with torch.no_grad():
-                lpips_values = [ self.loss_fn_vgg(generated_video_pixels[:,idx], cleaned_video_pixels[:,idx]) for idx in range(generated_video_pixels.shape[1])]
-        else:
-            lpips_values = [ self.loss_fn_vgg(generated_video_pixels[:,idx], cleaned_video_pixels[:,idx]) for idx in range(generated_video_pixels.shape[1])]
-            
-        return torch.stack(lpips_values).squeeze() # makes this size [num_of_frames] from [num_of_frames,1,1,1]
-        
-
-    
-    
-    def first_window_loss_scale(self):
-        """
-        Applies a gradient mask over the loss formula for the first window.
+        Applies a gradient mask over the DMD loss formula for the first chunk to match the the distribution of the
+        teacher model more.
 
         Implements some method so that, ideally, when self.pipeline.first_window_size=21 (the max), it is the same as
         just normal DMD, and only takes affect when first_window_size shrinks.
 
         """
 
-        max_first_window_window_size = self.inference_pipeline.num_max_frames # get the # of latent frames from latent
+        loss_coeffcient_factor = 1
+        max_first_window_window_size = original_latent.shape[1] # get the # of latent frames from latent
         current_first_window_window_size = self.inference_pipeline.first_window_size * self.inference_pipeline.num_frame_per_block
         
-        match self.first_window_loss_scale_scheduler:
+        match self.first_window_loss_method:
             case 'normalized_inverted_first_window_size':
                 loss_coeffcient_factor = (max_first_window_window_size - current_first_window_window_size) / max_first_window_window_size
+
+            case 'lpips':
+                NotImplementedError(f"{self.first_window_loss_method} is not implemented")
                 
             case _:
-                loss_coeffcient_factor = 1        
+                NotImplementedError(f"{self.first_window_loss_method} is not implemented")
 
-        return loss_coeffcient_factor
+
+        print("=========== CALCULATE WINDOW LOSS =====================")
+        print(f"loss coefficient: {loss_coeffcient_factor}")
+        
+        first_window_dmd_loss = 0.5 * F.mse_loss(original_latent.double()[gradient_mask], 
+                                    (original_latent.double() - grad.double()).detach()[gradient_mask], 
+                                    reduction="mean")
+        
+        print(f"first_window_dmd_loss: {first_window_dmd_loss}")
+        
+        # import ipdb;ipdb.set_trace()
+        print("=========== DONE CALCULATE WINDOW LOSS =====================")
+        
+
+        return loss_coeffcient_factor * first_window_dmd_loss
 
 
 
@@ -358,8 +307,7 @@ class ProgressiveDMD(SelfForcingModel):
         conditional_dict: dict,
         unconditional_dict: dict,
         clean_latent: torch.Tensor,
-        regression_info: dict,
-        initial_latent: torch.Tensor = None,
+        initial_latent: torch.Tensor = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict]:
         """
         Generate image/videos from noise and compute the DMD loss.
@@ -371,19 +319,10 @@ class ProgressiveDMD(SelfForcingModel):
             - conditional_dict: a dictionary containing the conditional information (e.g. text embeddings, image embeddings).
             - unconditional_dict: a dictionary containing the unconditional information (e.g. null/negative text embeddings, null/negative image embeddings).
             - clean_latent: a tensor containing the clean latents [B, F, C, H, W]. Need to be passed when no backward simulation is used.
-            - regression_info should contain information about the regression loss:
-                - cleaned_video_pixels: tensor representing pixel values for a video
-                - noise_latent: the corresponding noise from which the cleaned_video_pixels was generated from
-                - reg_conditioning_signal: conditioing signal for generation
-                
         Output:
             - loss: a scalar tensor representing the generator loss.
             - generator_log_dict: a dictionary containing the intermediate tensors for logging.
         """
-        
-        
-        self.set_first_window_mask(image_or_video_shape)
-        
         # Step 1: Unroll generator to obtain fake videos
         pred_image, gradient_mask, denoised_timestep_from, denoised_timestep_to = self._run_generator(
             image_or_video_shape=image_or_video_shape,
@@ -392,7 +331,7 @@ class ProgressiveDMD(SelfForcingModel):
         )
 
         # Step 2: Compute the DMD loss
-        dmd_loss_info, dmd_log_dict  = self.compute_distribution_matching_loss(
+        dmd_loss, dmd_log_dict, first_window_dmd_loss, first_window_log_dict  = self.compute_distribution_matching_loss(
             image_or_video=pred_image,
             conditional_dict=conditional_dict,
             unconditional_dict=unconditional_dict,
@@ -401,42 +340,13 @@ class ProgressiveDMD(SelfForcingModel):
             denoised_timestep_to=denoised_timestep_to
         )
 
-        # calculate regression loss
-        # if self.use_dmd_regression_loss or self.using_first_window_loss and regression_info:
-        if regression_info:
-            reg_stack = self.calculate_lpips_loss(
-                            regression_info["cleaned_video_pixels"], 
-                            regression_info["noise_latents"],
-                            regression_info["reg_conditional_dict"])
-            torch.cuda.empty_cache()
-
-
-            dmd_loss_info['dmd_reg_loss'] = self.reg_loss_coefficient * torch.mean(reg_stack, dim=0)
-            dmd_loss_info['first_window_dmd_reg_loss'] = self.reg_loss_coefficient * torch.mean(reg_stack[:self.chunks_for_first_window], dim=0)
-        else:
-            dmd_loss_info['dmd_reg_loss'] = torch.mean([0])
-            dmd_loss_info['first_window_dmd_reg_loss'] = torch.mean([0])
-            
-            
-            
-        # calculate the loss        
-        dmd_losses = dmd_loss_info['dmd_loss'] + dmd_loss_info['dmd_reg_loss']
-        first_window_losses = dmd_loss_info['first_window_dmd_loss'] + dmd_loss_info['first_window_dmd_reg_loss']
-        first_window_loss_scale = dmd_loss_info["first_window_loss_scale"]
+        dmd_original_loss = dmd_loss.clone().detach()
+        dmd_loss = dmd_loss + first_window_dmd_loss
+        dmd_log_dict.update(first_window_log_dict)
         
-        dmd_loss_info['generator_loss'] = (dmd_losses + first_window_loss_scale * first_window_losses)
 
-        print("==== dmd_loss_info ====")
-        print(dmd_loss_info)
-        print("==== done dmd_loss_info ====")
-        
-        dmd_log_dict.update({"first_window_size": self.inference_pipeline.first_window_size})
-        
-        return dmd_loss_info, dmd_log_dict
+        return dmd_loss, dmd_original_loss, first_window_dmd_loss, dmd_log_dict
 
-    
-    
-    
     def critic_loss(
         self,
         image_or_video_shape,

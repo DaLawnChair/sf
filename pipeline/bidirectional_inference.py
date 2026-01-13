@@ -3,7 +3,6 @@ import torch
 
 from utils.wan_wrapper import WanDiffusionWrapper, WanTextEncoder, WanVAEWrapper
 
-
 class BidirectionalInferencePipeline(torch.nn.Module):
     def __init__(
             self,

@@ -8,8 +8,12 @@ if [[ "$1" == "task" ]]; then
     export TASK_RUN_REPO="/opt/huawei/schedule-train/algorithm/$2/"
     export DATASET_PATH="/opt/huawei/dataset/"
     export CHECKPOINT_SAVE="/opt/huawei/checkpoint/"
-    export qwen3_vl_files="/opt/huawei/dataset/john_env/only_selfforcing_task/" # needs the task version of the flash_attn
-    # export WHEELHOUSE_PATH="/opt/huawei/schedule-train/algorithm/wheelhouse"
+    export qwen3_vl_files="/opt/huawei/dataset/john_env/only_selfforcing_task/" # [][] CHECK IF THIS WORKS???? needs the task version of the flash_attn
+    # export WHEELHOUSE_PATH="/opt/huawei/schedule-train/algorithm/wheelhouse"\
+    export TORCH_HOME="/opt/huawei/dataset/self_forcing/lpips_models/torch/" # for lpips
+    
+    export VBENCH_CACHE_DIR=$TORCH_HOME 
+    export VBENCH2_CACHE_DIR=$TORCH_HOME
 else
     echo "MODE: normal usage (aka webstudio)"
     export JOHN_MODE_FOR_TRAINING="webstudio"
@@ -18,6 +22,10 @@ else
     export CHECKPOINT_SAVE="/home/ma-user/work/algorithm/arvd_repos/"
     export qwen3_vl_files="/home/ma-user/work/algorithm/arvd_repos/only_selfforcing/"
     # export WHEELHOUSE_PATH="/home/ma-user/work/algorithm/arvd_repos/wheelhouse/"
+    export TORCH_HOME="/home/ma-user/work/dataset/self_forcing/lpips_models/torch/" # for lpips
+    
+    export VBENCH_CACHE_DIR=$TORCH_HOME 
+    export VBENCH2_CACHE_DIR=$TORCH_HOME
 fi
 
 echo "JOHN_MODE_FOR_TRAINING = ${JOHN_MODE_FOR_TRAINING}"
