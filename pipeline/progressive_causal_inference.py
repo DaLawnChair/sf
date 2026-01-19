@@ -15,6 +15,7 @@ class ProgressiveCausalInferencePipeline(torch.nn.Module):
             text_encoder=None,
             vae=None,
             local_attn_size=-1,
+            initial_first_window_size: int = 7,
             progressive_enabled=True
     ):
         super().__init__()
@@ -47,10 +48,12 @@ class ProgressiveCausalInferencePipeline(torch.nn.Module):
         if self.num_frame_per_block > 1:
             self.generator.model.num_frame_per_block = self.num_frame_per_block
             
-        self.progressive_enabled = progressive_enabled
-        self.first_window_size = 1
-        if self.progressive_enabled:
-            self.first_window_size = 7 #default is 7 blocks, and initialization is all available blocks
+        
+        self.progressive_enabled = progressive_enabled    
+        assert initial_first_window_size>=1, f"ERROR: invalid initial_first_window_size ({initial_first_window_size})"
+        self.initial_first_window_size = initial_first_window_size
+        self.first_window_size = initial_first_window_size
+        
 
     def inference(
         self,
@@ -141,10 +144,6 @@ class ProgressiveCausalInferencePipeline(torch.nn.Module):
                     [0], dtype=torch.long, device=noise.device)
                 self.kv_cache1[block_index]["local_end_index"] = torch.tensor(
                     [0], dtype=torch.long, device=noise.device)
-
-        # john: [][] test out without kv-cache
-        # self.kv_cache1 = None
-        # self.crossattn_cache = None
         
         # Step 2: Cache context feature
         current_start_frame = 0

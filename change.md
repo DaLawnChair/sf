@@ -70,4 +70,17 @@ branch: (progressive_naive) add progressive distillation methods, at least naiiv
     * added a small test file test_lmdb_video_loading.py so we can quickly verify that it works interactively
 
 
+14/1/2026:
+Continuing on the previous instance, this was made since it has been a while since I touched this repo.
+Specific goals:
+    * get progressive_dmd to train without going OOM
+        * can test this by using ELatentLPIPS, and see if remaining in latent form can reduce this
+    * generate new data, this time in latent form (this is also done inside of 15/12/2025 since that was configured first)
+    * test out different schedulers
+    * due to Webstudio not letting me open a notebook, the paths are changed to be on turbodiffusion/arvd_respos insead of arvd_repos
+    * current training is treating the text and the latent datasets as 2 seperate enteties, where they should be treated as one in order to keep the dmd+regression loss on the points of data, and not have the datapoint be used multiple times. Wasn't done before because the regression dataset is so small
+* added 2 versions of the pacing function to the trainer/progressive_dmd.py, these are naiive
+* updated model/progressive_dmd.py to use latent space data to work with ELatentLPIPS
+* configs are now saved in the same folder wandb logs are made in
+* progressive dmd can be used for naiive step-wise base regression and the ELatentLPIPS can be disabled from using it for backprop, so we can just view what the performance is like. These two configurations are being run to view trial runs on if ELatentLPIPS is a stable metric that converges and if progressive dmd can be done naively with just a stepwise scheduler without any blending or loss performance results
 

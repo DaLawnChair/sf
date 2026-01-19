@@ -30,12 +30,13 @@ import torch
 import wandb
 import time
 import os
+import random
 
 class Trainer:
     def __init__(self, config):
         self.config = config
         self.step = 0
-
+        
         # Step 1: Initialize the distributed training environment (rank, seed, dtype, logging etc.)
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
@@ -324,7 +325,7 @@ class Trainer:
             regression_info["reg_conditional_dict"] = self.model.text_encoder(
                 text_prompts=reg_batch["prompt"])
             regression_info["noise_latents"] = reg_batch["noise"]
-            regression_info["cleaned_video_pixels"] = reg_batch["video"]
+            regression_info["cleaned_video_latents"] = reg_batch["video"]
         
             
                 
@@ -415,6 +416,67 @@ class Trainer:
         current_video = video.permute(0, 1, 3, 4, 2).cpu().numpy() * 255.0
         return current_video
 
+    # John: Update pacing function      
+    def update_pacing(self, generator_log_dict):
+        self.pacing_has_updated = False
+        # Update the stepping of the first window size according to the folllowing methods
+        def none_wise(generator_log_dict):
+            return 
+        def step_wise(generator_log_dict):
+            # base case
+            if self.w1_old == self.w1_new and self.w1_new == 1:
+                return
+
+            threshold_window_size = self.model.inference_pipeline.initial_first_window_size
+            for i in range(len(self.config.pacing_kwargs.step_wise_thresholds)):
+                threshold_step = self.config.pacing_kwargs.step_wise_thresholds[i][0]
+                threshold_window_size = self.config.pacing_kwargs.step_wise_thresholds[i][1]
+                if self.step< threshold_step:
+                    break
+
+            self.pacing_has_updated = self.w1_old > threshold_window_size
+            # set w1_old and new to the same
+            if self.pacing_has_updated:
+                self.w1_old = min(1,threshold_window_size)
+                self.w1_new = self.w1_old
+                
+        def loss_wise(generator_log_dict):
+            # base case
+            if self.w1_old == self.w1_new and self.w1_new == 1:
+                return 
+            raise NotImplemented("Loss_wise pacing function to be implemented")
+
+
+        match self.config.pacing_kwargs.pacing_function:
+            case "none_wise":
+                stepping_func = none_wise
+            case "step_wise":
+                stepping_func = step_wise
+            case "loss_wise":
+                stepping_func = loss_wise
+            case _:
+                stepping_func = none_wise
+
+        def get_blending_method_probability(generator_log_dict):
+            if self.config.pacing_kwargs.blending_method == 'none':
+                self.w1_change_probability = 0 
+            elif self.config.pacing_kwargs.blending_method == 'loss_based_stochastic':
+                self.w1_change_probability = 0.5               
+            else:
+                raise NotImplemented("Loss_wise blending function to be implemented")
+        
+        stepping_func(generator_log_dict)
+        get_blending_method_probability(generator_log_dict)
+        
+            
+    
+        self.model.inference_pipeline.first_window_size = random.choices([self.w1_old, self.w1_new], [1-self.w1_change_probability, self.w1_change_probability])[0]
+
+        ## [][]TODO reset EMA to not leak old weights into newer verison
+        # if self.pacing_has_updated:
+        #     self.resetEMA()
+
+                
     def train(self):
         start_step = self.step
         # reset_ema_next_step = False
@@ -426,8 +488,8 @@ class Trainer:
         
         if self.model.inference_pipeline is None:
             self.model._initialize_inference_pipeline()
-        w1_old = self.model.inference_pipeline.first_window_size
-        w1_new = w1_old - 1
+        self.w1_old = self.model.inference_pipeline.first_window_size
+        self.w1_new = self.w1_old - 1
         
         while True:
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
@@ -492,32 +554,6 @@ class Trainer:
             # Increment the step since we finished gradient update
             self.step += 1
 
-            # probabilitically choose the w1 size according to the trend of reducing variance
-            if generator_log_dict and first_window_reg_loss := generator_log_dict['first_window_dmd_reg_loss'].mean().item() != 0:
-                history_of_first_window_reg_loss.append(first_window_reg_loss)
-                
-                curr_variance = torch.var(torch.tensor(history_of_first_window_reg_loss[-4:]))
-                stored_variances.append(curr_variance)
-                if len(stored_variances)>=5 and torch.mean(torch.tensor(stored_variances[-5:-1])) < curr_variance:
-                    w1_change_probability += 0.2
-                    
-                    if w1_change_probability > 1:
-                        w1_new = min(w1_new-1,1)
-                        w1_old = min(w1_old-1,1)
-                        stored_variances = [] # have at least 5 steps buffer that are dedicated to the new regimen
-       
-                    # policy is to randomly set this value for every model
-                    import random 
-                    self.model.inference_pipeline.first_window_size = random.choices([w1_old, w1_new], [1-w1_change_probability, w1_change_probability])[0]
-            ## stop training if loss is NaN
-            # if "generator_loss" in generator_log_dict and "first_window_loss" in generator_log_dict:
-            #     generator_loss_is_nan = generator_log_dict["generator_loss"].mean().item() is torch.nan
-            #     first_window_loss_is_nan = generator_log_dict["first_window_loss"].mean().item() is torch.nan
-            #     if generator_loss_is_nan or first_window_loss_is_nan:
-            #         wandb.log(
-            #             {"ERROR":f"Nan in loss. generator_loss_is_nan={generator_loss_is_nan}, first_window_loss_is_nan={first_window_loss_is_nan}"}, step=self.step)
-                    # break
-
             # Create EMA params (if not already created)
             if (self.step >= self.config.ema_start_step) and \
                     (self.generator_ema is None) and (self.config.ema_weight > 0):
@@ -528,19 +564,6 @@ class Trainer:
                 torch.cuda.empty_cache()
                 self.save()
                 torch.cuda.empty_cache()
-
-            
-            # john: update the first_window_size if loss achieves below a threshold
-            # GENERATOR_LOSS_THRESHOLD = 0.175
-#             if reset_ema_next_step: # reset the turn after to have the 
-#                 self.resetEMA() # should reset as prior averages are of a different window size
-#                 reset_ema_next_step = False
-#             if 'first_window_loss' in generator_log_dict and \
-#             GENERATOR_LOSS_THRESHOLD < generator_log_dict["first_window_loss"].mean().item():
-
-#                 self.model.inference_pipeline.first_window_size = max(1, self.model.inference_pipeline.first_window_size-1)
-#                 reset_ema_next_step = True
-            
 
             # Logging
             if self.is_main_process:
@@ -597,3 +620,33 @@ class Trainer:
                     if not self.disable_wandb:
                         wandb.log({"per iteration time": current_time - self.previous_time}, step=self.step)
                     self.previous_time = current_time
+
+            # update the pacing 
+            self.update_pacing(generator_log_dict)
+            
+            ## probabilitically choose the w1 size according to the trend of reducing variance
+#             if generator_log_dict and first_window_reg_loss := generator_log_dict['first_window_dmd_reg_loss'].mean().item() != 0:
+#                 history_of_first_window_reg_loss.append(first_window_reg_loss)
+                
+#                 curr_variance = torch.var(torch.tensor(history_of_first_window_reg_loss[-4:]))
+#                 stored_variances.append(curr_variance)
+#                 if len(stored_variances)>=5 and torch.mean(torch.tensor(stored_variances[-5:-1])) < curr_variance:
+#                     w1_change_probability += 0.2
+                    
+#                     if w1_change_probability > 1:
+#                         w1_new = min(w1_new-1,1)
+#                         w1_old = min(w1_old-1,1)
+#                         stored_variances = [] # have at least 5 steps buffer that are dedicated to the new regimen
+       
+#                     # policy is to randomly set this value for every model
+#                     import random 
+#                     self.model.inference_pipeline.first_window_size = random.choices([w1_old, w1_new], [1-w1_change_probability, w1_change_probability])[0]
+                
+            ## stop training if loss is NaN
+            # if "generator_loss" in generator_log_dict and "first_window_loss" in generator_log_dict:
+            #     generator_loss_is_nan = generator_log_dict["generator_loss"].mean().item() is torch.nan
+            #     first_window_loss_is_nan = generator_log_dict["first_window_loss"].mean().item() is torch.nan
+            #     if generator_loss_is_nan or first_window_loss_is_nan:
+            #         wandb.log(
+            #             {"ERROR":f"Nan in loss. generator_loss_is_nan={generator_loss_is_nan}, first_window_loss_is_nan={first_window_loss_is_nan}"}, step=self.step)
+                    # break

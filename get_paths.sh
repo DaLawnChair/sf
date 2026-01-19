@@ -5,7 +5,7 @@
 if [[ "$1" == "task" ]]; then
     echo "MODE: task"
     export JOHN_MODE_FOR_TRAINING="task"
-    export TASK_RUN_REPO="/opt/huawei/schedule-train/algorithm/$2/"
+    export TASK_RUN_REPO="/opt/huawei/schedule-train/algorithm/arvd_repos/$2/"
     export DATASET_PATH="/opt/huawei/dataset/"
     export CHECKPOINT_SAVE="/opt/huawei/checkpoint/"
     export qwen3_vl_files="/opt/huawei/dataset/john_env/only_selfforcing_task/" # [][] CHECK IF THIS WORKS???? needs the task version of the flash_attn
@@ -17,10 +17,10 @@ if [[ "$1" == "task" ]]; then
 else
     echo "MODE: normal usage (aka webstudio)"
     export JOHN_MODE_FOR_TRAINING="webstudio"
-    export TASK_RUN_REPO="/home/ma-user/work/algorithm/arvd_repos/$2/"
+    export TASK_RUN_REPO="/home/ma-user/work/algorithm/turbodiffusion/arvd_repos/$2/"
     export DATASET_PATH="/home/ma-user/work/dataset/"
     export CHECKPOINT_SAVE="/home/ma-user/work/algorithm/arvd_repos/"
-    export qwen3_vl_files="/home/ma-user/work/algorithm/arvd_repos/only_selfforcing/"
+    export qwen3_vl_files="/home/ma-user/work/dataset/john_env/only_selfforcing/"
     # export WHEELHOUSE_PATH="/home/ma-user/work/algorithm/arvd_repos/wheelhouse/"
     export TORCH_HOME="/home/ma-user/work/dataset/self_forcing/lpips_models/torch/" # for lpips
     

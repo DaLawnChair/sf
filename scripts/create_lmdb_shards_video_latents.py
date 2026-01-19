@@ -93,10 +93,12 @@ def main():
     # for part_dir in all_dirs:
     all_files = sorted([os.path.join(args.data_path, part_dir) for part_dir in all_dirs])
     
+    all_files = all_files[:4000] # [][] john: limit to 4k for now 
+    
     print("len of all_files:", len(all_files))
     # import ipdb;ipdb.set_trace()
     # 2) Prepare a write transaction for each shard
-    for idx, file in tqdm(enumerate(all_files[:2000])): # john: limit to 2k for now
+    for idx, file in tqdm(enumerate(all_files)):
         try:
             data_dict = torch.load(file)
             data_dict = process_data_dict_videos(data_dict, seen_prompts)

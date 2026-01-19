@@ -8,18 +8,13 @@ run_task_folder="130126_elatentlpips_progressive_sf"
 if  [[ -z "${JOHN_MODE_FOR_TRAINING}" ]]; then 
     echo "Not source, so perform sourcing and make environment"
     echo "INITIAL SET UP"
-    cd "algorithm/arvd_repos/"$run_task_folder # pwd is /opt/huawei/schedule-train/
+    cd "algorithm/"$run_task_folder # pwd is /opt/huawei/schedule-train/
     echo "where am i?"
     pwd
     source ./get_paths.sh task $run_task_folder
     cd $TASK_RUN_REPO
     echo "echo $qwen3_vl_files"
     source ./make_env.sh
-    
-    # comment out later
-    # python -c "from elatentlpips import ELatentLPIPS ; lpips_model = ELatentLPIPS(encoder='sd3', augment='bg', eval_mode=True) ; print('done')"
-
-    
 else
     echo "Already sourced (aka within ${JOHN_MODE_FOR_TRAINING}), so do not do any sourcing"
 fi
@@ -108,8 +103,8 @@ fi
 
 NNODES=1
 
-instance_folder_name="test_bidirectional_capture_elatentlpips"
-config_name="150126_evaluate_baselines/elantentlpips_no_ode_init_pacing-none_wise_blend-none.yaml"
+instance_folder_name="elantentlpips_no_ode_init_pacing-step_wise_blend-none_webstudio_test"
+config_name="150126_evaluate_baselines/elantentlpips_no_ode_init_pacing-step_wise_blend-none_webstudio.yaml"
 
 test_path="$DATASET_PATH"john_env/self_forcing_clone/self_forcing/model_training
 # make log directory and save a version of the config

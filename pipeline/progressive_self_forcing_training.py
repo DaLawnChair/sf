@@ -22,7 +22,8 @@ class ProgressiveSelfForcingTrainingPipeline:
                  last_step_only: bool = True, # john: for testing, set this to true, from False
                  num_max_frames: int = 21,
                  context_noise: int = 0,
-                 progressive_enabled: bool = False,
+                 initial_first_window_size: int = 7,
+                 progressive_enabled: bool = True,
                  **kwargs):
         super().__init__()
         self.scheduler = scheduler
@@ -46,12 +47,14 @@ class ProgressiveSelfForcingTrainingPipeline:
         self.num_max_frames = num_max_frames
         self.kv_cache_size = num_max_frames * self.frame_seq_length
 
+        
         self.progressive_enabled = progressive_enabled
-        self.first_window_size = 1
-        if self.progressive_enabled:
-            # self.first_window_size = 7 #default is 7 blocks, and initialization is all available blocks
-            self.first_window_size = 7
-
+        
+        assert initial_first_window_size>=1, f"ERROR: invalid initial_first_window_size ({initial_first_window_size})"
+        self.initial_first_window_size = initial_first_window_size
+        self.first_window_size = initial_first_window_size
+        
+        
     def generate_and_sync_list(self, num_blocks, num_denoising_steps, device):
         rank = dist.get_rank() if dist.is_initialized() else 0
 
@@ -240,9 +243,7 @@ class ProgressiveSelfForcingTrainingPipeline:
             denoised_timestep_from = 1000 - torch.argmin(
                 (self.scheduler.timesteps.cuda() - self.denoising_step_list[exit_flags[0]].cuda()).abs(), dim=0).item()
 
-        if return_sim_step:
-            return output, denoised_timestep_from, denoised_timestep_to, exit_flags[0] + 1
-
+            
         # clear caches to reduce memory. I think this is ok because gradients shouldn't flow through this if we have the video
         if hasattr(self,'kv_cache1'):
             del self.kv_cache1
@@ -252,6 +253,10 @@ class ProgressiveSelfForcingTrainingPipeline:
             del self.crossattn_cache
             gc.collect()
             torch.cuda.empty_cache()
+            
+        if return_sim_step:
+            return output, denoised_timestep_from, denoised_timestep_to, exit_flags[0] + 1
+
         return output, denoised_timestep_from, denoised_timestep_to
 
     

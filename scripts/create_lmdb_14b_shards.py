@@ -61,7 +61,7 @@ def main():
         all_files += sorted(glob.glob(os.path.join(args.data_path, part_dir, "*.pt")))
 
     # 2) Prepare a write transaction for each shard
-    for idx, file in tqdm(enumerate(all_files)):
+    for idx, file in tqdm(enumerate(all_files[:4000])): # limit to 4k for now
         try:
             data_dict = torch.load(file)
             data_dict = process_data_dict(data_dict, seen_prompts)

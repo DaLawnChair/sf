@@ -14,6 +14,7 @@ from torch.utils.data.distributed import DistributedSampler
 from pipeline import (
     CausalDiffusionInferencePipeline,
     CausalInferencePipeline,
+    ProgressiveCausalInferencePipeline
 )
 from utils.dataset import TextDataset, TextImagePairDataset
 from utils.misc import set_seed
@@ -60,23 +61,27 @@ default_config = OmegaConf.load("configs/default_config.yaml")
 config = OmegaConf.merge(default_config, config)
 
 
-if 'bidirectional' in args.config_path:
-    from pipeline import (
-        BidirectionalDiffusionInferencePipeline,
-        BidirectionalInferencePipeline,
-    )
-    if 'diffusion' in args.config_path:
-        pipeline = BidirectionalDiffusionInferencePipeline(config, device=device)
-    else:
-        pipeline = BidirectionalInferencePipeline(config, device=device)
-else:
-    # Initialize pipeline
-    if hasattr(config, 'denoising_step_list'):
-        # Few-step inference
-        pipeline = CausalInferencePipeline(config, device=device)
-    else:
-        # Multi-step diffusion inference
-        pipeline = CausalDiffusionInferencePipeline(config, device=device)
+# if 'bidirectional' in args.config_path:
+#     from pipeline import (
+#         BidirectionalDiffusionInferencePipeline,
+#         BidirectionalInferencePipeline,
+#     )
+#     if 'diffusion' in args.config_path:
+#         pipeline = BidirectionalDiffusionInferencePipeline(config, device=device)
+#     else:
+#         pipeline = BidirectionalInferencePipeline(config, device=device)
+# else:
+#     # Initialize pipeline
+#     if hasattr(config, 'denoising_step_list'):
+#         # Few-step inference
+#         pipeline = CausalInferencePipeline(config, device=device)
+#     else:
+#         # Multi-step diffusion inference
+#         pipeline = CausalDiffusionInferencePipeline(config, device=device)
+
+
+pipeline = ProgressiveCausalInferencePipeline(config,device=device)
+
 print("type(pipeline)",type(pipeline))
 
 if args.checkpoint_path:

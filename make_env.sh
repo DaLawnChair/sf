@@ -69,9 +69,9 @@ command -v pip || type -a pip
 
 
 python --version
-echo "+++++++++++++++++++++++++++++ SHOW PYTHON VERSION +++++++++++++++++++++++++++++"
-# pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ -r ${qwen3_vl_files%/}/webstudio_requirements.txt
-pip install --no-index --find-link=${qwen3_vl_files%/}/wheelhouse/ python_dateutil omegaconf
+## echo "+++++++++++++++++++++++++++++ SHOW PYTHON VERSION +++++++++++++++++++++++++++++"
+## pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ -r #${qwen3_vl_files%/}/webstudio_requirements.txt
+## pip install --no-index --find-link=${qwen3_vl_files%/}/wheelhouse/ python_dateutil omegaconf
 
 echo "++++++++++++++++++++++++++++++++++ DONE DOING THE WEIRD PACKAGE INSTALLS ++++++++++++++++++++++++++++++++++"
 
@@ -81,6 +81,13 @@ pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ ipdb
 pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ flash-attn==2.8.3 #+cu128torch2.8
 
 pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ lpips #+cu128torch2.8
+
+# 13/01/2026 Add in elantentlpips:
+pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ setuptools
+pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ wheel
+pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ elatentlpips
+pip install --no-index --find-links=${qwen3_vl_files%/}/wheelhouse/ ninja #+cu128torch2.8
+
 
 ### Old method, tasks do not let you download
 # #pip install torch==2.8.0 torchvision==0.23.0
@@ -148,14 +155,3 @@ try:
 except Exception as e:
     print("CUDA init error:", e)
 PY
-
-
-# Use this python: /home/ma-user/miniconda3/bin/python
-# either export PATH="$HOME/miniconda3/bin:$PATH" or just always use that, instead of just python
-
-# cd fastvideo
-# pip install -e .
-# pip install vsa
-# model path: /home/ma-user/work/dataset/john_wan2_1_t2v_1_3b_diffusers/models--Wan-AI--Wan2.1-T2V-1.3B-Diffusers_trimmed
-
-# run example_infer.py
