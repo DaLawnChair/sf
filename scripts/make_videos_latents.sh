@@ -91,7 +91,7 @@ torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
   scripts/make_videos_latents_actually_latents.py \
   --config_path "${TASK_RUN_REPO}configs/default_config_bidirectional_diffusion.yaml" \
   --data_path "${TASK_RUN_REPO}prompts/vidprom_filtered_extended.txt" \
-  --output_folder "${DATASET_PATH}self_forcing/self_forcing/latent_form_bidirectional_diffusion_inference_videos_guidance5.0_wan1.3B_vidprom/" \
+  --output_folder "${DATASET_PATH}john_env/self_forcing_clone/self_forcing/latent_form_bidirectional_diffusion_inference_videos_guidance6.0_wan1.3B_vidprom/" \
   --use_ema \
   --use_bidirectional
   

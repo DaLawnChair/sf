@@ -231,12 +231,6 @@ class Trainer:
         self.max_grad_norm_critic = getattr(config, "max_grad_norm_critic", 10.0)
         self.previous_time = None
         
-        
-        # clear unused values before training
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-
 
     def resetEMA(self):
         """
@@ -518,12 +512,7 @@ class Trainer:
 
                     if self.generator_ema is not None:
                         self.generator_ema.update(self.model.generator)
-                    import gc
-                    gc.collect()
-                    torch.cuda.empty_cache()
                     
-                    
-
                 extra_crit = self.fwdbwd_one_step(batch, False)
                 print("done critic generation")
                 accumulated_critic_logs.append(extra_crit)

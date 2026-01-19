@@ -321,17 +321,18 @@ def main():
 
 
         
-
+        args.timeshift # default 5.0
+        args.guidance_scale # default 5.0
         pure_noise, video = model.generate(
                  input_prompt = prompt['prompts'],
                  size=(832, 480),
                  frame_num=81,
-                 shift=5.0,
+                 shift=args.timeshift, # default 5.0
                  sample_solver='unipc',
                  sampling_steps=50,
-                 guide_scale=5.0,
+                 guide_scale=args.guidance_scale, # default 5.0
                  n_prompt=args.negative_prompt,
-                 seed=-1,
+                 seed=0, # default is -1, but we want 0 for fixed results
                  offload_model=False)
                         
         # video = pipeline.inference(

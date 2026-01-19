@@ -417,8 +417,6 @@ class ProgressiveDMD(SelfForcingModel):
                             regression_info["cleaned_video_latents"], 
                             regression_info["noise_latents"],
                             regression_info["reg_conditional_dict"])
-            torch.cuda.empty_cache()
-
 
             dmd_loss_info['dmd_reg_loss'] = torch.mean(reg_stack, dim=0)
             dmd_loss_info['first_window_dmd_reg_loss'] = torch.mean(reg_stack[:self.chunks_for_first_window], dim=0)

@@ -244,15 +244,8 @@ class ProgressiveSelfForcingTrainingPipeline:
                 (self.scheduler.timesteps.cuda() - self.denoising_step_list[exit_flags[0]].cuda()).abs(), dim=0).item()
 
             
-        # clear caches to reduce memory. I think this is ok because gradients shouldn't flow through this if we have the video
-        if hasattr(self,'kv_cache1'):
-            del self.kv_cache1
-            gc.collect()
-            torch.cuda.empty_cache()
-        if hasattr(self,'crossattn_cache'):
-            del self.crossattn_cache
-            gc.collect()
-            torch.cuda.empty_cache()
+        # clear caches to reduce memory.
+        self.clear_kv_cache()
             
         if return_sim_step:
             return output, denoised_timestep_from, denoised_timestep_to, exit_flags[0] + 1
@@ -412,15 +405,8 @@ class ProgressiveSelfForcingTrainingPipeline:
             # Step 3.4: update the start and end frame indices
             current_start_frame += current_num_frames
 
-        # clear caches to reduce memory. I think this is ok because gradients shouldn't flow through this if we have the video
-        if hasattr(self,'kv_cache1'):
-            del self.kv_cache1
-            gc.collect()
-            torch.cuda.empty_cache()
-        if hasattr(self,'crossattn_cache'):
-            del self.crossattn_cache
-            gc.collect()
-            torch.cuda.empty_cache()
+        # clear caches to reduce memory.
+        self.clear_kv_cache()
         return output
     
     
@@ -428,12 +414,6 @@ class ProgressiveSelfForcingTrainingPipeline:
         """
         Initialize a Per-GPU KV cache for the Wan model.
         """
-        
-        if hasattr(self,'kv_cache1'):
-            del self.kv_cache1
-            gc.collect()
-            torch.cuda.empty_cache()
-            
         kv_cache1 = []
 
         for _ in range(self.num_transformer_blocks):
@@ -450,11 +430,6 @@ class ProgressiveSelfForcingTrainingPipeline:
         """
         Initialize a Per-GPU cross-attention cache for the Wan model.
         """
-        if hasattr(self,'crossattn_cache'):
-            del self.crossattn_cache
-            gc.collect()
-            torch.cuda.empty_cache()
-            
         crossattn_cache = []
 
         for _ in range(self.num_transformer_blocks):
@@ -464,3 +439,24 @@ class ProgressiveSelfForcingTrainingPipeline:
                 "is_init": False
             })
         self.crossattn_cache = crossattn_cache
+
+        
+        def clear_kv_cache(self):
+            """
+            zero out the caches, this is better than removing them since we don't have to reallocate them everytime inference is called
+            """
+            
+            if getattr(self,'kv_cache1', None) is not None:
+                for block in self.kv_cache1:
+                    block['k'].zero_()
+                    block['v'].zero_()
+                    if "global_end_index" in block:
+                        block['global_end_index'].zero_()
+                    if "local_end_index" in block:
+                        block['local_end_index'].zero_()
+                    
+            if getattr(self,'crossattn_cache', None) is not None:
+                for block in self.crossattn_cache:
+                    block['k'].zero_()
+                    block['v'].zero_()
+                    block['is_init'] = False
