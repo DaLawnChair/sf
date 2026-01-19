@@ -422,11 +422,11 @@ class Trainer:
         # Update the stepping of the first window size according to the folllowing methods
         def none_wise(generator_log_dict):
             return 
+        
         def step_wise(generator_log_dict):
             # base case
-            if self.w1_old == self.w1_new and self.w1_new == 1:
-                return
-
+            # if self.w1_old == self.w1_new and self.w1_new == 1:
+            #     return
             threshold_window_size = self.model.inference_pipeline.initial_first_window_size
             for i in range(len(self.config.pacing_kwargs.step_wise_thresholds)):
                 threshold_step = self.config.pacing_kwargs.step_wise_thresholds[i][0]
@@ -437,8 +437,8 @@ class Trainer:
             self.pacing_has_updated = self.w1_old > threshold_window_size
             # set w1_old and new to the same
             if self.pacing_has_updated:
-                self.w1_old = min(1,threshold_window_size)
-                self.w1_new = self.w1_old
+                self.w1_old = self.w1_new
+                self.w1_new = threshold_window_size
                 
         def loss_wise(generator_log_dict):
             # base case
