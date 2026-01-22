@@ -84,3 +84,10 @@ Specific goals:
 * configs are now saved in the same folder wandb logs are made in
 * progressive dmd can be used for naiive step-wise base regression and the ELatentLPIPS can be disabled from using it for backprop, so we can just view what the performance is like. These two configurations are being run to view trial runs on if ELatentLPIPS is a stable metric that converges and if progressive dmd can be done naively with just a stepwise scheduler without any blending or loss performance results
 
+20/1/2026:
+* removed many of the torch.cuda.empty_cache() and replaced the cache deletition code with a cache zeroing code. These help the model train for more iterations (about 440 to ~470), but still not enough.
+
+22/1/2026
+* many training logs and configs were used for viewing the naiive experiments:
+* Experiment 1: Is ELatentLPIPS stable when used as a regression validation loss from generator to pregenerated teacher videos? No. Loss does not seem to converge nor is it very stable
+* Experiment 2: Can the model generate videos with the progressively shrinking window? Depends on if it is ODE initialized. If not, the video frames after the first chunk fails to generate into anything coherent. They may be 1s videos where every second is a new video. If using the ODE initialization, then the model will be able to generate coherent video, but there is an idealogical mismatch because we will initialize the model with the causal scheme, but will not train on such scheme until at the last stage of the curriculum.

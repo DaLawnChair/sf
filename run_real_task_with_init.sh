@@ -108,8 +108,8 @@ fi
 
 NNODES=1
 
-instance_folder_name="test_bidirectional_capture_elatentlpips_params_match_data"
-config_name="150126_evaluate_baselines_params_match_data/elantentlpips_no_ode_init_pacing-none_wise_blend-none.yaml"
+instance_folder_name="test_bidirectional_capture_elatentlpips_params_match_data_with_init"
+config_name="150126_evaluate_baselines_params_match_data/elantentlpips_ode_init_pacing-none_wise_blend-none.yaml"
 
 test_path="$DATASET_PATH"john_env/self_forcing_clone/self_forcing/model_training
 # make log directory and save a version of the config

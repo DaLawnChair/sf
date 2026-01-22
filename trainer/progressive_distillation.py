@@ -496,7 +496,7 @@ class Trainer:
             accumulated_critic_logs = []
 
             for accumulation_step in range(self.gradient_accumulation_steps):
-                print(f"======== On accumulation_step: {accumulation_step+1} ========")
+                print(f"======== STEP: {self.step} On accumulation_step: {accumulation_step+1} ========")
                 batch = next(self.dataloader)
                 if TRAIN_GENERATOR:
                     reg_batch = next(self.reg_dataloader)

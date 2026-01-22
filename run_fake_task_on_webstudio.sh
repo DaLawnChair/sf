@@ -103,14 +103,13 @@ fi
 
 NNODES=1
 
-instance_folder_name="elantentlpips_no_ode_init_pacing-step_wise_blend-none_webstudio_test"
-config_name="150126_evaluate_baselines/elantentlpips_no_ode_init_pacing-step_wise_blend-none_webstudio.yaml"
+instance_folder_name="test_bidirectional_capture_elatentlpips_params_match_data_WEBSTUDIO"
+config_name="150126_evaluate_baselines_params_match_data/elantentlpips_no_ode_init_pacing-none_wise_blend-none.yaml"
 
 test_path="$DATASET_PATH"john_env/self_forcing_clone/self_forcing/model_training
 # make log directory and save a version of the config
 mkdir -p "$test_path"/$instance_folder_name
 cp configs/$config_name "$test_path"/$instance_folder_name
-
 
 torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
   --rdzv_backend=c10d \

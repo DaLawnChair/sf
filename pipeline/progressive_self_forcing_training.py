@@ -440,23 +440,23 @@ class ProgressiveSelfForcingTrainingPipeline:
             })
         self.crossattn_cache = crossattn_cache
 
-        
-        def clear_kv_cache(self):
-            """
-            zero out the caches, this is better than removing them since we don't have to reallocate them everytime inference is called
-            """
-            
-            if getattr(self,'kv_cache1', None) is not None:
-                for block in self.kv_cache1:
-                    block['k'].zero_()
-                    block['v'].zero_()
-                    if "global_end_index" in block:
-                        block['global_end_index'].zero_()
-                    if "local_end_index" in block:
-                        block['local_end_index'].zero_()
-                    
-            if getattr(self,'crossattn_cache', None) is not None:
-                for block in self.crossattn_cache:
-                    block['k'].zero_()
-                    block['v'].zero_()
-                    block['is_init'] = False
+
+    def clear_kv_cache(self):
+        """
+        zero out the caches, this is better than removing them since we don't have to reallocate them everytime inference is called
+        """
+
+        if getattr(self,'kv_cache1', None) is not None:
+            for block in self.kv_cache1:
+                block['k'].zero_()
+                block['v'].zero_()
+                if "global_end_index" in block:
+                    block['global_end_index'].zero_()
+                if "local_end_index" in block:
+                    block['local_end_index'].zero_()
+
+        if getattr(self,'crossattn_cache', None) is not None:
+            for block in self.crossattn_cache:
+                block['k'].zero_()
+                block['v'].zero_()
+                block['is_init'] = False

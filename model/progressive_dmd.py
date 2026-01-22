@@ -262,7 +262,7 @@ class ProgressiveDMD(SelfForcingModel):
                     "first_window_dmdtrain_gradient_norm": torch.mean(torch.abs(grad[self.first_window_mask].detach()))
             }
         else:
-            first_window_loss = 0
+            first_window_dmd_loss = torch.tensor(0.0).to(self.device)
             first_window_log_dict = {}
                         
                 
@@ -301,7 +301,7 @@ class ProgressiveDMD(SelfForcingModel):
         cleaned_video_latents = cleaned_video_latents.squeeze(0).to(dtype=torch.float32, device=self.device)
         
         
-        if not self.use_dmd_regression_loss or not self.using_first_window_loss:
+        if not self.use_dmd_regression_loss or not self.use_first_window_dmd_regression_loss:
             with torch.no_grad():
                 generated_video_latents = self.inference_pipeline.inference(
                     noise=noise_latents,
@@ -319,16 +319,12 @@ class ProgressiveDMD(SelfForcingModel):
 
             assert generated_video_latents.shape == cleaned_video_latents.shape, f"Error: generated_video_latents.shape {generated_video_latents.shape} != cleaned_video_latents.shape {cleaned_video_latents.shape}"
 
-        if not self.use_dmd_regression_loss or not self.using_first_window_loss:
+        if not self.use_dmd_regression_loss or not self.use_first_window_dmd_regression_loss:
             with torch.no_grad():
                 
                 lpips_values = [ self.loss_fn_vgg(generated_video_latents[:,idx], cleaned_video_latents[:,idx], normalize=True).mean() for idx in range(generated_video_latents.shape[1])]
         else:
             lpips_values = [ self.loss_fn_vgg(generated_video_latents[:,idx], cleaned_video_latents[:,idx], normalize=True).mean() for idx in range(generated_video_latents.shape[1])]
-        
-        print("==============================================lpips_values==============================================")
-        
-        print("lpips_values:", lpips_values)
         
         return torch.stack(lpips_values).squeeze() # makes this size [num_of_frames] from [num_of_frames,1,1,1]
         
@@ -411,7 +407,7 @@ class ProgressiveDMD(SelfForcingModel):
         )
 
         # calculate regression loss
-        # if self.use_dmd_regression_loss or self.using_first_window_loss and regression_info:
+        # if (self.use_dmd_regression_loss or self.using_first_window_regression_loss) and regression_info:
         if regression_info:
             reg_stack = self.calculate_lpips_loss(
                             regression_info["cleaned_video_latents"], 
@@ -426,13 +422,24 @@ class ProgressiveDMD(SelfForcingModel):
             
             
             
-        # calculate the loss        
-        dmd_losses = dmd_loss_info['dmd_loss'] + self.reg_loss_coefficient * dmd_loss_info['dmd_reg_loss']
-        first_window_losses = dmd_loss_info['first_window_dmd_loss'] + self.reg_loss_coefficient * dmd_loss_info['first_window_dmd_reg_loss']
+        # calculate the loss based on the given losses:
+        if self.use_dmd_regression_loss:
+            dmd_losses = dmd_loss_info['dmd_loss'] + self.reg_loss_coefficient * dmd_loss_info['dmd_reg_loss']
+        else:
+            dmd_losses = dmd_loss_info['dmd_loss']
+        
+        if self.use_first_window_dmd_regression_loss:
+            first_window_losses = dmd_loss_info['first_window_dmd_loss'] + self.reg_loss_coefficient * dmd_loss_info['first_window_dmd_reg_loss']
+        else:
+            first_window_losses = dmd_loss_info['first_window_dmd_loss']
+            
         first_window_loss_scale = dmd_loss_info["first_window_loss_scale"]
         
-        dmd_loss_info['generator_loss'] = (dmd_losses + first_window_loss_scale * first_window_losses)
-
+        if self.using_first_window_loss:
+            dmd_loss_info['generator_loss'] = (dmd_losses + first_window_loss_scale * first_window_losses)
+        else:
+            dmd_loss_info['generator_loss'] = dmd_losses
+            
         print("==== dmd_loss_info ====")
         print(dmd_loss_info)
         print("==== done dmd_loss_info ====")

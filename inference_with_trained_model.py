@@ -35,7 +35,11 @@ parser.add_argument("--seed", type=int, default=0, help="Random seed")
 parser.add_argument("--num_samples", type=int, default=1, help="Number of samples to generate per prompt")
 parser.add_argument("--save_with_index", action="store_true",
                     help="Whether to save the video using the index or prompt as the filename")
+parser.add_argument("--first_window_size", type=int, default=7,
+                    help="how many latent frames are in the first window?")
+
 args = parser.parse_args()
+
 
 # Initialize distributed inference
 if "LOCAL_RANK" in os.environ:
@@ -80,7 +84,7 @@ config = OmegaConf.merge(default_config, config)
 #         pipeline = CausalDiffusionInferencePipeline(config, device=device)
 
 
-pipeline = ProgressiveCausalInferencePipeline(config,device=device)
+pipeline = ProgressiveCausalInferencePipeline(config,device=device, initial_first_window_size= args.first_window_size)
 
 print("type(pipeline)",type(pipeline))
 
@@ -255,4 +259,4 @@ for key,value in results.items():
 import json
 with open(os.path.join(args.output_folder, 'inference_results.json'), 'w') as f:
     json.dump(results, f, indent=4)
-import ipdb;ipdb.set_trace()
+# import ipdb;ipdb.set_trace()
