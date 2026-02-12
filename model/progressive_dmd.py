@@ -417,8 +417,8 @@ class ProgressiveDMD(SelfForcingModel):
             dmd_loss_info['dmd_reg_loss'] = torch.mean(reg_stack, dim=0)
             dmd_loss_info['first_window_dmd_reg_loss'] = torch.mean(reg_stack[:self.chunks_for_first_window], dim=0)
         else:
-            dmd_loss_info['dmd_reg_loss'] = torch.mean([0])
-            dmd_loss_info['first_window_dmd_reg_loss'] = torch.mean([0])
+            dmd_loss_info['dmd_reg_loss'] = torch.mean(torch.tensor([0.0], device=self.device))
+            dmd_loss_info['first_window_dmd_reg_loss'] = torch.mean(torch.tensor([0.0], device=self.device))
             
             
             

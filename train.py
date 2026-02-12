@@ -5,6 +5,7 @@ import wandb
 
 from trainer import DiffusionTrainer, GANTrainer, ODETrainer, ScoreDistillationTrainer, ProgressiveScoreDistillationTrainer
 
+import torch 
 
 def main():
     parser = argparse.ArgumentParser()
@@ -30,6 +31,7 @@ def main():
     config.wandb_save_dir = args.wandb_save_dir
     config.disable_wandb = args.disable_wandb
 
+    
     if config.trainer == "diffusion":
         trainer = DiffusionTrainer(config)
     elif config.trainer == "gan":

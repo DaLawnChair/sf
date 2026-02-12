@@ -32,6 +32,11 @@ import time
 import os
 import random
 
+
+# 22/01/2026 added traceback and profiling for testing:
+from torch.profiler import profile, record_function, ProfilerActivity
+import traceback
+
 class Trainer:
     def __init__(self, config):
         self.config = config
@@ -171,22 +176,24 @@ class Trainer:
             num_workers=8)
         
         # Step 3a. Initalize the video dataloader
-        reg_dataset = VideoRegressionShardingLMDBDataset(config.regression_data_path, max_pair=int(1e8))
-        reg_sampler = torch.utils.data.distributed.DistributedSampler(
-            reg_dataset, shuffle=True, drop_last=True)
-        reg_dataloader = torch.utils.data.DataLoader(
-            reg_dataset,
-            batch_size=config.batch_size,
-            sampler=reg_sampler,
-            num_workers=8)
+        self.regression_data_enabled_through_path = config.regression_data_path != ""
+        if self.regression_data_enabled_through_path:
+            reg_dataset = VideoRegressionShardingLMDBDataset(config.regression_data_path, max_pair=int(1e8))
+            reg_sampler = torch.utils.data.distributed.DistributedSampler(
+                reg_dataset, shuffle=True, drop_last=True)
+            reg_dataloader = torch.utils.data.DataLoader(
+                reg_dataset,
+                batch_size=config.batch_size,
+                sampler=reg_sampler,
+                num_workers=8)
         
-
         if dist.get_rank() == 0:
             print("DATASET SIZE %d" % len(dataset))
-            print("REGRESSION DATASET SIZE %d" % len(reg_dataset))
+            
+            print("REGRESSION DATASET SIZE %d" % len(reg_dataset)) if self.regression_data_enabled_through_path else None
             
         self.dataloader = cycle(dataloader)
-        self.reg_dataloader = cycle(reg_dataloader)
+        self.reg_dataloader = cycle(reg_dataloader) if self.regression_data_enabled_through_path else None
 
         ##############################################################################################################
         # 6. Set up EMA parameter containers
@@ -495,27 +502,44 @@ class Trainer:
             accumulated_generator_logs = []
             accumulated_critic_logs = []
 
+            # try:
+            #     with profile(
+            #         activities=[ProfilerActivity.CUDA],
+            #         record_shapes=False,
+            #         profile_memory=True,
+            #         with_stack=False
+            #     ) as prof:
             for accumulation_step in range(self.gradient_accumulation_steps):
                 print(f"======== STEP: {self.step} On accumulation_step: {accumulation_step+1} ========")
                 batch = next(self.dataloader)
                 if TRAIN_GENERATOR:
-                    reg_batch = next(self.reg_dataloader)
-                    extra_gen = self.fwdbwd_one_step(batch, True, reg_batch=reg_batch)
-                    print("done generator generation")
-                    accumulated_generator_logs.append(extra_gen)
-                    
-                    for k,v in extra_gen.items():
-                        if torch.is_tensor(v):
-                            print(f"{k}: {v}, {v.device}, {v.numel()}, {v.requires_grad}")
-                        else:
-                            print(f"{k}: {v}")
+
+                    with record_function("train fwdbwd_one_step"):
+                        reg_batch = next(self.reg_dataloader) if self.reg_dataloader else None
+
+                        extra_gen = self.fwdbwd_one_step(batch, True, reg_batch=reg_batch)
+                        print("done generator generation")
+                        accumulated_generator_logs.append(extra_gen)
+
+                    # profiler.step()
 
                     if self.generator_ema is not None:
                         self.generator_ema.update(self.model.generator)
-                    
+
                 extra_crit = self.fwdbwd_one_step(batch, False)
                 print("done critic generation")
                 accumulated_critic_logs.append(extra_crit)
+
+#             except Exception as e:
+
+#                 prof.export_chrome_trace(os.path.join(self.config.wandb_save_dir, "trace.json"))
+
+#                 with open(os.path.join(self.config.wandb_save_dir, 'key_averages_mem.txt'),'w') as f:
+#                     f.write(str(prof.key_averages().table(sort_by="self_cuda_memory_usage",row_limit=200)))
+
+#                 with open(os.path.join(self.config.wandb_save_dir, 'exception.txt'),'w') as f:
+#                     f.write("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+
 
             # compute grad norm and update params
             if TRAIN_GENERATOR:
@@ -562,9 +586,7 @@ class Trainer:
                     update_dict = {
                             k:(v.mean().item() if torch.is_tensor(v) else v) for k,v in generator_log_dict.items() 
                         }
-                    # update_dict["first_window_size"] = self.model.inference_pipeline.first_window_size
-                    
-                    
+                                        
                     wandb_loss_dict.update(
                         update_dict
                     )
@@ -576,25 +598,17 @@ class Trainer:
                             print(f"{key}: {value} {value.device}")
                         else:
                             print(f"{key}: {value}")
-                                  
-                        
-                    
+              
                 wandb_loss_dict.update(
                     {
                         "critic_loss": critic_log_dict["critic_loss"].mean().item(),
                         "critic_grad_norm": critic_log_dict["critic_grad_norm"].mean().item()
                     }
                 )
-                
-                # del critic_log_dict
-                # del generator_log_dict
-                
-
+      
                 if not self.disable_wandb:
                     wandb.log(wandb_loss_dict, step=self.step)
-
-
-                
+          
             if self.step % self.config.gc_interval == 0:
                 if dist.get_rank() == 0:
                     logging.info("DistGarbageCollector: Running GC.")
