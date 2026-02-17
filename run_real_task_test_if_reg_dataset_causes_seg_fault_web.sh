@@ -3,18 +3,23 @@ echo "where am i?"
 pwd
 
 export NCLL_NVLS_ENABLE="0"
-run_task_folder="151225_naiive_progressive_sf"
+run_task_folder="220126_debug_training_seg_fault"
 
 if  [[ -z "${JOHN_MODE_FOR_TRAINING}" ]]; then 
     echo "Not source, so perform sourcing and make environment"
     echo "INITIAL SET UP"
-    cd "algorithm/"$run_task_folder # pwd is /opt/huawei/schedule-train/
+    cd "algorithm/arvd_repos/"$run_task_folder # pwd is /opt/huawei/schedule-train/
     echo "where am i?"
     pwd
     source ./get_paths.sh task $run_task_folder
     cd $TASK_RUN_REPO
     echo "echo $qwen3_vl_files"
     source ./make_env.sh
+    
+    # comment out later
+    # python -c "from elatentlpips import ELatentLPIPS ; lpips_model = ELatentLPIPS(encoder='sd3', augment='bg', eval_mode=True) ; print('done')"
+
+    
 else
     echo "Already sourced (aka within ${JOHN_MODE_FOR_TRAINING}), so do not do any sourcing"
 fi
@@ -103,13 +108,19 @@ fi
 
 NNODES=1
 
-instance_folder_name="self_forcing_dmd_recreate_grad_acc8"
-config_name="self_forcing_dmd_recreate_grad_acc8.yaml"
+instance_folder_name="webstudio_check_if_reg_dataset_and_calculation_leads_to_error"
+config_name="220126_check_if_reg_dataset_and_calculation_leads_to_error/check_if_reg_dataset_and_calculation_leads_to_error.yaml"
+
+test_path="$DATASET_PATH"john_env/self_forcing_clone/self_forcing/model_training
+# make log directory and save a version of the config
+mkdir -p "$test_path"/$instance_folder_name
+cp configs/$config_name "$test_path"/$instance_folder_name
+
 
 torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
   --rdzv_backend=c10d \
   --rdzv_endpoint $MASTER_ADDR":"$MASTER_PORT \
   train.py \
   --config_path configs/$config_name \
-  --logdir "$DATASET_PATH"self_forcing/self_forcing/$instance_folder_name/logs \
-  --wandb-save-dir "$DATASET_PATH"self_forcing/self_forcing/$instance_folder_name
+  --logdir "$test_path"/$instance_folder_name/logs \
+  --wandb-save-dir "$test_path"/$instance_folder_name

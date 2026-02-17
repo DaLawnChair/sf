@@ -3,7 +3,7 @@ echo "where am i?"
 pwd
 
 export NCLL_NVLS_ENABLE="0"
-run_task_folder="130126_elatentlpips_progressive_sf"
+run_task_folder="220126_debug_training_seg_fault"
 
 if  [[ -z "${JOHN_MODE_FOR_TRAINING}" ]]; then 
     echo "Not source, so perform sourcing and make environment"
@@ -108,15 +108,15 @@ fi
 
 NNODES=1
 
-instance_folder_name="test_naiive_stepwise_window_progression_params_match_data_with_no_init_with_dmd_reg_loss"
-config_name="150126_evaluate_baselines_params_match_data/elantentlpips_no_ode_init_pacing-step_wise_blend-none_with_dmd_reg_loss.yaml"
+instance_folder_name="test_220126_debug_training_seg_fault_with_init"
+config_name="220126_check_if_reg_dataset_and_calculation_leads_to_error/check_if_reg_dataset_and_calculation_leads_to_error_with_init.yaml"
 
 test_path="$DATASET_PATH"john_env/self_forcing_clone/self_forcing/model_training
 # make log directory and save a version of the config
 mkdir -p "$test_path"/$instance_folder_name
 cp configs/$config_name "$test_path"/$instance_folder_name
 
-
+export CUDA_LAUNCH_BLOCKING=1 # for viewing errors
 torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
   --rdzv_backend=c10d \
   --rdzv_endpoint $MASTER_ADDR":"$MASTER_PORT \

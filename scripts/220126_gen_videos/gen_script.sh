@@ -3,7 +3,7 @@ echo "where am i?"
 pwd
 
 export NCLL_NVLS_ENABLE="0"
-run_task_folder="130126_elatentlpips_progressive_sf"
+run_task_folder="151225_naiive_progressive_sf"
 
 if  [[ -z "${JOHN_MODE_FOR_TRAINING}" ]]; then 
     echo "Not source, so perform sourcing and make environment"
@@ -34,23 +34,6 @@ except ModuleNotFoundError:
     FLASH_ATTN_AVAILABLE = False
     sys.exit(1)
 PY
-
-
-echo "\n\n\n"
-echo "\n\n\n"
-echo "================================== ALL SYSTEM INFOS =================================="
-nvcc --version
-nvidia-smi
-pip show torch
-cat /etc/os-release
-echo "================================== DONE LISTING ALL SYSTEM INFOS =================================="
-echo "\n\n\n"
-echo "\n\n\n"
-
-# cd flash-attention
-# python setup.py install
-
-
 # ====================================================================
 # This initial set up was taken from Samuel's run for FastWan distillation for LoRAs.
 # Basic Info
@@ -90,12 +73,10 @@ echo "[DIST] NNODES=$NNODES NODE_RANK=$NODE_RANK MASTER_ADDR=$MASTER_ADDR MASTER
 
 # End of Samuel's config file copy-over
 # ====================================================================
-
+# python setup.py develop
 if  [[ "${JOHN_MODE_FOR_TRAINING}" == "task" ]]; then 
     export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
     nproc_per_node=8
-    # export CUDA_VISIBLE_DEVICES="0,1"
-    # nproc_per_node=2
 else
     export CUDA_VISIBLE_DEVICES="0,1"
     nproc_per_node=2
@@ -103,18 +84,24 @@ fi
 
 NNODES=1
 
-instance_folder_name="test_bidirectional_capture_elatentlpips_params_match_data_WEBSTUDIO"
-config_name="150126_evaluate_baselines_params_match_data/elantentlpips_no_ode_init_pacing-none_wise_blend-none.yaml"
-
-test_path="$DATASET_PATH"john_env/self_forcing_clone/self_forcing/model_training
-# make log directory and save a version of the config
-mkdir -p "$test_path"/$instance_folder_name
-cp configs/$config_name "$test_path"/$instance_folder_name
-
+# for making videos of latent form
 torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
   --rdzv_backend=c10d \
   --rdzv_endpoint $MASTER_ADDR":"$MASTER_PORT \
-  train.py \
-  --config_path configs/$config_name \
-  --logdir "$test_path"/$instance_folder_name/logs \
-  --wandb-save-dir "$test_path"/$instance_folder_name
+  scripts/220126_gen_videos/make_videos_latents_actually_latents.py \
+  --config_path "${TASK_RUN_REPO}configs/default_config_bidirectional_diffusion.yaml" \
+  --data_path "${TASK_RUN_REPO}prompts/vidprom_filtered_extended.txt" \
+  --output_folder "${DATASET_PATH}john_env/self_forcing_clone/self_forcing/latent_form_bidirectional_diffusion_inference_videos_guidance6.0_wan1.3B_vidprom/" \
+  --use_ema \
+  --use_bidirectional
+  
+## For making the videos of video form
+# torchrun --nnodes=$NNODES --nproc_per_node=$nproc_per_node --rdzv_id=5235 \
+#   --rdzv_backend=c10d \
+#   --rdzv_endpoint $MASTER_ADDR":"$MASTER_PORT \
+#   scripts/make_videos_latents.py \
+#   --config_path "${TASK_RUN_REPO}configs/default_config_bidirectional_diffusion.yaml" \
+#   --data_path "${TASK_RUN_REPO}prompts/vidprom_filtered_extended.txt" \
+#   --output_folder "${DATASET_PATH}self_forcing/self_forcing/bidirectional_diffusion_inference_videos_guidance5.0_wan1.3B_vidprom/" \
+#   --use_ema \
+#   --use_bidirectional
