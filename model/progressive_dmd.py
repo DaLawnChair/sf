@@ -76,10 +76,6 @@ class ProgressiveDMD(SelfForcingModel):
         self.reg_loss_coefficient =  getattr(args, "reg_loss_coefficient", 1.0)
         
         self.device = device
-
-
-        
-        
         # need to load in LPIPS if doing regression loss
         if self.reg_loss_method=='lpips':
             # lpips needs to decode to video into pixel form
@@ -151,10 +147,9 @@ class ProgressiveDMD(SelfForcingModel):
             conditional_dict=unconditional_dict,
             timestep=timestep
         )
-
         pred_real_image = pred_real_image_cond + (
-            pred_real_image_cond - pred_real_image_uncond
-        ) * self.real_guidance_scale
+                    pred_real_image_cond - pred_real_image_uncond
+                ) * self.real_guidance_scale
 
         # Step 3: Compute the DMD gradient (DMD paper eq. 7).
         grad = (pred_fake_image - pred_real_image)
@@ -171,6 +166,7 @@ class ProgressiveDMD(SelfForcingModel):
             "dmdtrain_gradient_norm": torch.mean(torch.abs(grad)).detach(),
             "timestep": timestep.detach()
         }
+
 
     def compute_distribution_matching_loss(
         self,
@@ -249,7 +245,6 @@ class ProgressiveDMD(SelfForcingModel):
             dmd_loss = 0.5 * F.mse_loss(original_latent.double(
             ), (original_latent.double() - grad.double()).detach(), reduction="mean")
 
-
         first_window_loss_scale = self.first_window_loss_scale()
         # add in dmd first chunk loss. only perform this if doing dmd loss
         if self.using_first_window_loss:
@@ -274,9 +269,9 @@ class ProgressiveDMD(SelfForcingModel):
         
         dmd_log_dict.update(first_window_log_dict)
         return dmd_loss_info, dmd_log_dict
-                        
 
-    
+
+
     def set_first_window_mask(self, noise_shape):
         if self.inference_pipeline is None:
             self._initialize_inference_pipeline()
@@ -312,8 +307,6 @@ class ProgressiveDMD(SelfForcingModel):
                     noise=noise_latents,
                     **conditional_dict,
                 )
-
-        
         # video shape [1, 81, 3, 480, 832]
         with torch.no_grad():
 
@@ -354,7 +347,6 @@ class ProgressiveDMD(SelfForcingModel):
                 loss_coeffcient_factor = 0
                 
         return loss_coeffcient_factor
-
 
 
     def generator_loss(
@@ -427,7 +419,6 @@ class ProgressiveDMD(SelfForcingModel):
             dmd_losses = dmd_loss_info['dmd_loss'] + self.reg_loss_coefficient * dmd_loss_info['dmd_reg_loss']
         else:
             dmd_losses = dmd_loss_info['dmd_loss']
-        
         if self.use_first_window_dmd_regression_loss:
             first_window_losses = dmd_loss_info['first_window_dmd_loss'] + self.reg_loss_coefficient * dmd_loss_info['first_window_dmd_reg_loss']
         else:
@@ -481,7 +472,6 @@ class ProgressiveDMD(SelfForcingModel):
                 conditional_dict=conditional_dict,
                 initial_latent=initial_latent
             )
-
         # Step 2: Compute the fake prediction
         min_timestep = denoised_timestep_to if self.ts_schedule and denoised_timestep_to is not None else self.min_score_timestep
         max_timestep = denoised_timestep_from if self.ts_schedule_max and denoised_timestep_from is not None else self.num_train_timestep
@@ -530,7 +520,6 @@ class ProgressiveDMD(SelfForcingModel):
                 xt=noisy_generated_image.flatten(0, 1),
                 timestep=critic_timestep.flatten(0, 1)
             ).unflatten(0, image_or_video_shape[:2])
-
         denoising_loss = self.denoising_loss_func(
             x=generated_image.flatten(0, 1),
             x_pred=pred_fake_image.flatten(0, 1),

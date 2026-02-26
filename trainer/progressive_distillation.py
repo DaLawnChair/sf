@@ -33,10 +33,6 @@ import os
 import random
 
 
-# 22/01/2026 added traceback and profiling for testing:
-from torch.profiler import profile, record_function, ProfilerActivity
-import traceback
-
 class Trainer:
     def __init__(self, config):
         self.config = config
@@ -97,7 +93,6 @@ class Trainer:
             print(f"Wandb initalized. Saving to {config.wandb_save_dir}")
             
         self.output_path = config.logdir
-
         # Step 2: Initialize the model and optimizer
         if config.distribution_loss == "causvid":
             self.model = CausVid(config, device=self.device)
@@ -188,8 +183,7 @@ class Trainer:
                 num_workers=8)
         
         if dist.get_rank() == 0:
-            print("DATASET SIZE %d" % len(dataset))
-            
+            print("DATASET SIZE %d" % len(dataset))            
             print("REGRESSION DATASET SIZE %d" % len(reg_dataset)) if self.regression_data_enabled_through_path else None
             
         self.dataloader = cycle(dataloader)
@@ -236,14 +230,13 @@ class Trainer:
 
         self.max_grad_norm_generator = getattr(config, "max_grad_norm_generator", 10.0)
         self.max_grad_norm_critic = getattr(config, "max_grad_norm_critic", 10.0)
-        self.previous_time = None
-        
+        self.previous_time = None        
 
     def resetEMA(self):
         """
         Copy over the data from the generator when performing the hard reset for the EMA parameters
         """
-        for p, p_ema in zip(self.model.generator.parameters(), self.genereator_ema.parameters()):
+        for p, p_ema in zip(self.model.generator.parameters(), self.generator_ema.parameters()):
             p_ema.data.copy_(p.data)
 
     def save(self):
@@ -502,26 +495,16 @@ class Trainer:
             accumulated_generator_logs = []
             accumulated_critic_logs = []
 
-            # try:
-            #     with profile(
-            #         activities=[ProfilerActivity.CUDA],
-            #         record_shapes=False,
-            #         profile_memory=True,
-            #         with_stack=False
-            #     ) as prof:
             for accumulation_step in range(self.gradient_accumulation_steps):
                 print(f"======== STEP: {self.step} On accumulation_step: {accumulation_step+1} ========")
                 batch = next(self.dataloader)
                 if TRAIN_GENERATOR:
 
-                    with record_function("train fwdbwd_one_step"):
-                        reg_batch = next(self.reg_dataloader) if self.reg_dataloader else None
+                    reg_batch = next(self.reg_dataloader) if self.reg_dataloader else None
 
-                        extra_gen = self.fwdbwd_one_step(batch, True, reg_batch=reg_batch)
-                        print("done generator generation")
-                        accumulated_generator_logs.append(extra_gen)
-
-                    # profiler.step()
+                    extra_gen = self.fwdbwd_one_step(batch, True, reg_batch=reg_batch)
+                    print("done generator generation")
+                    accumulated_generator_logs.append(extra_gen)
 
                     if self.generator_ema is not None:
                         self.generator_ema.update(self.model.generator)
@@ -561,9 +544,7 @@ class Trainer:
             critic_log_dict["critic_grad_norm"] = critic_grad_norm
             self.critic_optimizer.step()
             print("done critic step")
-
-                                              
-                
+            
             # Increment the step since we finished gradient update
             self.step += 1
 
@@ -626,8 +607,7 @@ class Trainer:
 
             # update the pacing 
             self.update_pacing(generator_log_dict)
-            
-            ## probabilitically choose the w1 size according to the trend of reducing variance
+## probabilitically choose the w1 size according to the trend of reducing variance
 #             if generator_log_dict and first_window_reg_loss := generator_log_dict['first_window_dmd_reg_loss'].mean().item() != 0:
 #                 history_of_first_window_reg_loss.append(first_window_reg_loss)
                 

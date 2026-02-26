@@ -8,20 +8,13 @@ run_task_folder="220126_debug_training_seg_fault"
 if  [[ -z "${JOHN_MODE_FOR_TRAINING}" ]]; then 
     echo "Not source, so perform sourcing and make environment"
     echo "INITIAL SET UP"
-    cd "algorithm/arvd_repos/"$run_task_folder # pwd is /opt/huawei/schedule-train/
-    echo "where am i?"
-    pwd
-    source ./get_paths.sh task $run_task_folder
+    source ./get_paths.sh web $run_task_folder
     cd $TASK_RUN_REPO
     echo "echo $qwen3_vl_files"
-    source ./make_env.sh
-    
-    # comment out later
-    # python -c "from elatentlpips import ELatentLPIPS ; lpips_model = ELatentLPIPS(encoder='sd3', augment='bg', eval_mode=True) ; print('done')"
 
     
 else
-    echo "Already sourced (aka within ${JOHN_MODE_FOR_TRAINING}), so do not do any sourcing"
+    source ./get_paths.sh web $run_task_folder
 fi
 
 
@@ -96,15 +89,8 @@ echo "[DIST] NNODES=$NNODES NODE_RANK=$NODE_RANK MASTER_ADDR=$MASTER_ADDR MASTER
 # End of Samuel's config file copy-over
 # ====================================================================
 
-if  [[ "${JOHN_MODE_FOR_TRAINING}" == "task" ]]; then 
-    export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
-    nproc_per_node=8
-    # export CUDA_VISIBLE_DEVICES="0,1"
-    # nproc_per_node=2
-else
-    export CUDA_VISIBLE_DEVICES="0,1"
-    nproc_per_node=2
-fi
+export CUDA_VISIBLE_DEVICES="4,5,6,7"
+nproc_per_node=4
 
 NNODES=1
 
