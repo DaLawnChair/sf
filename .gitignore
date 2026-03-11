@@ -7,3 +7,5 @@ prompts/vidprom_filtered_extended.txt
 videos/
 
 utils/wan_wrapper.py
+get_paths.sh
+

@@ -349,6 +349,8 @@ class Trainer:
         start_step = self.step
 
         while True:
+            print(f"======== On step: {self.step+1} ========")
+
             TRAIN_GENERATOR = self.step % self.config.dfake_gen_update_ratio == 0
             
             if TRAIN_GENERATOR:
@@ -359,7 +361,7 @@ class Trainer:
             accumulated_critic_logs = []
 
             for accumulation_step in range(self.gradient_accumulation_steps):
-                print(f"======== On accumulation_step: {accumulation_step+1} ========")
+                print(f"======== step: {self.step+1} == On accumulation_step: {accumulation_step+1} ========")
                 batch = next(self.dataloader)
                 if TRAIN_GENERATOR:
                     extra_gen = self.fwdbwd_one_step(batch, True)

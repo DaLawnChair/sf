@@ -12,41 +12,76 @@ import os
 # custom model, for regression loss term:
 
 class VideoRegressionShardingLMDBDataset(Dataset):
-    def __init__(self, data_path: str, max_pair: int = int(1e8)):
-        self.envs = []
-        self.index = []
+#     def __init__(self, data_path: str, max_pair: int = int(1e8)):
+#         self.envs = []
+#         self.index = []
 
-        for fname in sorted(os.listdir(data_path)):
-            path = os.path.join(data_path, fname)
-            env = lmdb.open(path,
+#         for fname in sorted(os.listdir(data_path)):
+#             path = os.path.join(data_path, fname)
+#             env = lmdb.open(path,
+#                             readonly=True,
+#                             lock=False,
+#                             readahead=False,
+#                             meminit=False)
+#             self.envs.append(env)
+
+#         self.video_shape = [None] * len(self.envs)
+#         self.noise_shape = [None] * len(self.envs)
+#         for shard_id, env in enumerate(self.envs):
+#             self.video_shape[shard_id] = get_array_shape_from_lmdb(env, 'video')
+#             self.noise_shape[shard_id] = get_array_shape_from_lmdb(env, 'noise')
+            
+#             for local_i in range(self.video_shape[shard_id][0]):
+#                 self.index.append((shard_id, local_i))
+
+#             # print("shard_id ", shard_id, " local_i ", local_i)
+
+#         self.max_pair = max_pair
+
+    def __init__(self, data_path: str, max_pair: int = int(1e8)):
+        self.envs = None
+        self.shard_paths = [os.path.join(data_path, fname) for fname in sorted(os.listdir(data_path))]
+        self.index = []
+        self.video_shape = []
+        self.noise_shape = []
+        
+        for shard_id, fname in enumerate(self.shard_paths):
+            # path = os.path.join(data_path, fname)
+            env = lmdb.open(fname,
                             readonly=True,
                             lock=False,
                             readahead=False,
                             meminit=False)
-            self.envs.append(env)
-
-        self.video_shape = [None] * len(self.envs)
-        self.noise_shape = [None] * len(self.envs)
-        for shard_id, env in enumerate(self.envs):
-            self.video_shape[shard_id] = get_array_shape_from_lmdb(env, 'video')
-            self.noise_shape[shard_id] = get_array_shape_from_lmdb(env, 'noise')
             
-            for local_i in range(self.video_shape[shard_id][0]):
+            vshape = get_array_shape_from_lmdb(env, 'video')
+            nshape = get_array_shape_from_lmdb(env, 'noise')
+            env.close()
+            
+            self.video_shape.append(vshape)
+            self.noise_shape.append(nshape)
+            for local_i in range(vshape[0]):
                 self.index.append((shard_id, local_i))
 
-            # print("shard_id ", shard_id, " local_i ", local_i)
-
         self.max_pair = max_pair
-
+        
     def __len__(self):
         return len(self.index)
 
+    
+    def _ensure_envs_open(self):
+        if self.envs is None:
+            self.envs = [
+                lmdb.open(p, readonly=True, lock=False, readahead=False, meminit=False)
+                for p in self.shard_paths
+            ]
     def __getitem__(self, idx):
         """
             Outputs:
                 - prompts: List of Strings
                 - latents: Tensor of shape (num_denoising_steps, num_frames, num_channels, height, width). It is ordered from pure noise to clean image.
         """
+        
+        self._ensure_envs_open()
         shard_id, local_idx = self.index[idx]
 
         video = retrieve_row_from_video_lmdb(
@@ -73,8 +108,8 @@ class VideoRegressionShardingLMDBDataset(Dataset):
 
         return {
             "prompt": prompts,
-            "video": torch.tensor(video, dtype=torch.float32),
-            "noise": torch.tensor(noise, dtype=torch.float32),
+            "video": torch.tensor(video, dtype=torch.float32), # float32
+            "noise": torch.tensor(noise, dtype=torch.float32), # float32
         }
     
     

@@ -241,8 +241,9 @@ class SelfForcingModel(BaseModel):
                 same_step_across_blocks=self.args.same_step_across_blocks,
                 last_step_only=self.args.last_step_only,
                 num_max_frames=self.num_training_frames,
-                context_noise=self.args.context_noise
+                context_noise=self.args.context_noise,
+                kwargs={**self.args}
             )
-
+            
             print("\n\n=================== WARNING: you are using the SelfForcingTrainingPipeline instead of ProgressiveSelfForcingTrainingPipeline in this" \
             "repository, ensure that this is what you want to run!! =================== \n\n")

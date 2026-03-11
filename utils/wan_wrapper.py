@@ -12,7 +12,10 @@ from wan.modules.causal_model import CausalWanModel
 
 # John: load from our own path
 import os
-FOLDER_PATH=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
+if 'shared' in os.environ["DATASET_PATH"]:
+    FOLDER_PATH=os.path.join("/shared/huggingface/hub/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
+else:
+    FOLDER_PATH=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
 MODEL_NAME="Wan-AI/Wan2.1-T2V-1.3B"
 class WanTextEncoder(torch.nn.Module):
     def __init__(self) -> None:
@@ -143,7 +146,7 @@ class WanDiffusionWrapper(torch.nn.Module):
         )
         self.scheduler.set_timesteps(1000, training=True)
 
-        self.seq_len = 32760  # [1, 21, 16, 60, 104]
+        self.seq_len = 1560 * local_attn_size if local_attn_size > 21 else 32760 #[1, 21, 16, 60, 104]
         self.post_init()
 
     def enable_gradient_checkpointing(self) -> None:
