@@ -1,3 +1,5 @@
+from multiprocessing.util import DEBUG
+
 from utils.wan_wrapper import WanDiffusionWrapper
 from utils.scheduler import SchedulerInterface
 from typing import List, Optional
@@ -40,10 +42,28 @@ class SelfForcingTrainingPipeline:
         total_cache_size = self.generator.model.local_attn_size #+ self.generator.model.sink_size # local_attn_size =-1 , sink_size=0 by default
         print(total_cache_size, self.generator.model.local_attn_size , self.generator.model.sink_size)
 
-        if total_cache_size<=0:
-            self.kv_cache_size = num_max_frames * self.frame_seq_length
-        else:
-            self.kv_cache_size = total_cache_size * self.frame_seq_length
+        num_training_frames: Optional[int] = kwargs.get("num_training_frames", 21)
+        slice_last_frames: int = int(kwargs.get("slice_last_frames", 21))
+
+        # Compute KV cache supporting list/int and global attention (-1)
+        def _resolve_kv_frames(local_cfg):
+            if isinstance(local_cfg, (list, tuple)):
+                base = int(max(local_cfg)) if len(local_cfg) > 0 else -1
+                return min(base + slice_last_frames, num_training_frames)
+            else:
+                base = int(local_cfg)
+                return min(base + slice_last_frames, num_training_frames)
+
+        kv_frames = _resolve_kv_frames(self.generator.model.local_attn_size)
+        
+        print(f"[KV policy] local_attn_size={self.generator.model.local_attn_size} slice_last_frames={slice_last_frames} num_training_frames={num_training_frames} -> kv_frames={kv_frames}")
+        self.kv_cache_size = int(kv_frames) * self.frame_seq_length
+
+        
+        # if total_cache_size<=0:
+        # self.kv_cache_size = num_max_frames * self.frame_seq_length
+        # else:
+        #     self.kv_cache_size = total_cache_size * self.frame_seq_length
             
     def generate_and_sync_list(self, num_blocks, num_denoising_steps, device):
         rank = dist.get_rank() if dist.is_initialized() else 0
