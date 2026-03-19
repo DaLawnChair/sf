@@ -22,7 +22,7 @@ class ProgressiveCausalInferencePipeline(torch.nn.Module):
         # Step 1: Initialize all models
         # john: add in local_attn_size param, in case for long form generation
         self.generator = WanDiffusionWrapper(
-            **getattr(args, "model_kwargs", {}),local_attn_size=local_attn_size, is_causal=True) if generator is None else generator
+            **getattr(args, "model_kwargs", {}), is_causal=True) if generator is None else generator
         self.text_encoder = WanTextEncoder() if text_encoder is None else text_encoder
         self.vae = WanVAEWrapper() if vae is None else vae
 

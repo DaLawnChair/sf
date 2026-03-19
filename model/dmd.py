@@ -51,6 +51,23 @@ class DMD(SelfForcingModel):
         else:
             self.scheduler.alphas_cumprod = None
 
+        
+        self.enable_latent_grad_diff  = getattr(args, "enable_latent_grad_diff", False)
+        self.enable_latent_diff  = getattr(args, "enable_latent_diff", False)
+        self.latent_diff_coef = getattr(args, "latent_diff_coef", 0)
+        
+
+    def get_latent_boundary_diff(self,latent):
+        """
+        Returns the latent difference between start and ends of the latent chunk
+        ie:
+        temp = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        temp[3::3] = [3, 6, 9, 12, 15, 18]
+        temp[2:-1:3] = [2, 5, 8, 11, 14, 17]
+        """
+        num_frames_per_chunk = 3
+        return latent[:, num_frames_per_chunk::num_frames_per_chunk, ...] - latent[:, num_frames_per_chunk-1:-1:num_frames_per_chunk, ...]
+
     def _compute_kl_grad(
         self, noisy_image_or_video: torch.Tensor,
         estimated_clean_image_or_video: torch.Tensor,
@@ -120,6 +137,31 @@ class DMD(SelfForcingModel):
             grad = grad / normalizer
         grad = torch.nan_to_num(grad)
 
+        
+        
+        if self.enable_latent_grad_diff:
+            
+            pred_fake_image_diff = self.get_latent_boundary_diff(pred_fake_image)
+            pred_real_image_diff = self.get_latent_boundary_diff(pred_real_image_diff)
+            grad_diff = (pred_fake_image_diff - pred_real_image_diff)
+            
+            if normalization:
+                # Step 4: Gradient normalization (DMD paper eq. 8).
+                estimated_clean_image_or_video_diff = self.get_latent_boundary_diff(estimated_clean_image_or_video)
+                
+                p_real_diff = (estimated_clean_image_or_video_diff - pred_real_image_diff)
+                normalizer = torch.abs(p_real).mean(dim=[1, 2, 3, 4], keepdim=True)
+                grad_diff = grad_diff / normalizer
+            grad_diff = torch.nan_to_num(grad_diff)
+            
+            
+            return grad, grad_diff, {
+                "dmdtrain_gradient_norm": torch.mean(torch.abs(grad)).detach(),
+                "dmdtrain_gradient_diff_norm": torch.mean(torch.abs(grad_diff)).detach(),
+                "timestep": timestep.detach()
+            }
+
+            
         return grad, {
             "dmdtrain_gradient_norm": torch.mean(torch.abs(grad)).detach(),
             "timestep": timestep.detach()
@@ -149,6 +191,11 @@ class DMD(SelfForcingModel):
 
         batch_size, num_frame = image_or_video.shape[:2]
 
+        
+        print("BOUNDS FOR TIMESTEPS")
+        print("min_timestep", "BASED OFF SAMPLING" if self.ts_schedule and denoised_timestep_to is not None else self.min_score_timestep)
+        print("max_timestep", "BASED OFF SAMPLING" if self.ts_schedule_max and denoised_timestep_from is not None else self.num_train_timestep)            
+            
         with torch.no_grad():
             # Step 1: Randomly sample timestep based on the given schedule and corresponding noise
             min_timestep = denoised_timestep_to if self.ts_schedule and denoised_timestep_to is not None else self.min_score_timestep
@@ -176,14 +223,24 @@ class DMD(SelfForcingModel):
                 timestep.flatten(0, 1)
             ).detach().unflatten(0, (batch_size, num_frame))
 
-            # Step 2: Compute the KL grad
-            grad, dmd_log_dict = self._compute_kl_grad(
-                noisy_image_or_video=noisy_latent,
-                estimated_clean_image_or_video=original_latent,
-                timestep=timestep,
-                conditional_dict=conditional_dict,
-                unconditional_dict=unconditional_dict
-            )
+            if self.enable_latent_grad_diff:
+                # Step 2: Compute the KL grad
+                grad, grad_diff, dmd_log_dict = self._compute_kl_grad(
+                    noisy_image_or_video=noisy_latent,
+                    estimated_clean_image_or_video=original_latent,
+                    timestep=timestep,
+                    conditional_dict=conditional_dict,
+                    unconditional_dict=unconditional_dict
+                )
+            else:
+                # Step 2: Compute the KL grad
+                grad, dmd_log_dict = self._compute_kl_grad(
+                    noisy_image_or_video=noisy_latent,
+                    estimated_clean_image_or_video=original_latent,
+                    timestep=timestep,
+                    conditional_dict=conditional_dict,
+                    unconditional_dict=unconditional_dict
+                )
 
         if gradient_mask is not None:
             dmd_loss = 0.5 * F.mse_loss(original_latent.double(
@@ -191,6 +248,31 @@ class DMD(SelfForcingModel):
         else:
             dmd_loss = 0.5 * F.mse_loss(original_latent.double(
             ), (original_latent.double() - grad.double()).detach(), reduction="mean")
+            
+        # compute raw latent difference with DMD
+        if self.enable_latent_grad_diff:
+            original_latent_diff = self.get_latent_boundary_diff(original_latent)
+            if gradient_mask is not None:
+                
+                dmd_diff_loss = 0.5 * F.mse_loss(original_latent_diff.double(
+                )[gradient_mask], (original_latent_diff.double() - grad_diff.double()).detach()[gradient_mask], reduction="mean")
+            else:
+                dmd_diff_loss = 0.5 * F.mse_loss(original_latent_diff.double(
+                ), (original_latent_diff.double() - grad_diff.double()).detach(), reduction="mean")
+                
+            
+            dmd_loss = dmd_loss + self.latent_diff_coef * dmd_diff_loss
+            print("dmd_diff_loss", dmd_diff_loss)
+            
+        # compute raw latent difference, no grad used for DMD
+        if self.enable_latent_diff:
+            original_latent_diff = self.get_latent_boundary_diff(original_latent)
+            # takes zeros_like because diffence is already baked in
+            dmd_loss = dmd_loss + self.latent_diff_coef * F.mse_loss(original_latent_diff, torch.zeros_like(original_latent_diff), reduction="mean")
+            
+        # print('dmd_log_dict.keys()', dmd_log_dict.keys())
+        # assert self.enable_latent_diff and not self.enable_latent_grad_diff
+        
         return dmd_loss, dmd_log_dict
 
     def generator_loss(

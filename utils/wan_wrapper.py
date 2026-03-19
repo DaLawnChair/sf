@@ -12,11 +12,19 @@ from wan.modules.causal_model import CausalWanModel
 
 # John: load from our own path
 import os
-if 'shared' in os.environ["DATASET_PATH"]:
-    FOLDER_PATH=os.path.join("/shared/huggingface/hub/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
-else:
-    FOLDER_PATH=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
-MODEL_NAME="Wan-AI/Wan2.1-T2V-1.3B"
+# if 'shared' in os.environ["DATASET_PATH"]:
+#     FOLDER_PATH=os.path.join("/shared/huggingface/hub/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
+# else:
+#     FOLDER_PATH=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
+
+
+FOLDER_PATH_1_3B=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
+
+FOLDER_PATH_14B=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-14B/snapshots/a064a6c71f5be440641209c07bf2a5ce7a2ff5e4")
+
+DEFAULT_FOLDER_PATH_FOR_MODULES = FOLDER_PATH_1_3B
+
+
 class WanTextEncoder(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -28,12 +36,12 @@ class WanTextEncoder(torch.nn.Module):
             device=torch.device('cpu')
         ).eval().requires_grad_(False)
         self.text_encoder.load_state_dict(
-            torch.load(f"{FOLDER_PATH}/models_t5_umt5-xxl-enc-bf16.pth",
+            torch.load(f"{DEFAULT_FOLDER_PATH_FOR_MODULES}/models_t5_umt5-xxl-enc-bf16.pth",
                        map_location='cpu', weights_only=False)
         )
 
         self.tokenizer = HuggingfaceTokenizer(
-            name=f"{FOLDER_PATH}/google/umt5-xxl/", seq_len=512, clean='whitespace')
+            name=f"{DEFAULT_FOLDER_PATH_FOR_MODULES}/google/umt5-xxl/", seq_len=512, clean='whitespace')
 
     @property
     def device(self):
@@ -72,7 +80,7 @@ class WanVAEWrapper(torch.nn.Module):
 
         # init model
         self.model = _video_vae(
-            pretrained_path=f"{FOLDER_PATH}/Wan2.1_VAE.pth",
+            pretrained_path=f"{DEFAULT_FOLDER_PATH_FOR_MODULES}/Wan2.1_VAE.pth",
             z_dim=16,
         ).eval().requires_grad_(False)
 
@@ -128,14 +136,22 @@ class WanDiffusionWrapper(torch.nn.Module):
             sink_size=0
     ):
         super().__init__()
-
+        if model_name=="Wan2.1-T2V-1.3B":
+            model_path = FOLDER_PATH_1_3B
+            print("using 1.3b model")
+        elif model_name=="Wan2.1-T2V-14B":
+            model_path = FOLDER_PATH_14B
+            print("using 14b model")
+        else:
+            raise NotImplementedError(f"{model_name} not implemented")
+            
         if is_causal:
             # john: use FOLDER_PATH instead of MODEL_NAME, as MODEL_NAME seems to take way
             #longer to load
             self.model = CausalWanModel.from_pretrained(
-                f"{FOLDER_PATH}", local_attn_size=local_attn_size, sink_size=sink_size)
+                f"{model_path}", local_attn_size=local_attn_size, sink_size=sink_size)
         else:
-            self.model = WanModel.from_pretrained(f"{FOLDER_PATH}")
+            self.model = WanModel.from_pretrained(f"{model_path}")
         self.model.eval()
 
         # For non-causal diffusion, all frames share the same timestep
