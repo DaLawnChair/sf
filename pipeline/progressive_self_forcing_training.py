@@ -19,7 +19,7 @@ class ProgressiveSelfForcingTrainingPipeline:
                  num_frame_per_block=3,
                  independent_first_frame: bool = False,
                  same_step_across_blocks: bool = False,
-                 last_step_only: bool = True, # john: for testing, set this to true, from False
+                 last_step_only: bool = False,
                  num_max_frames: int = 21,
                  context_noise: int = 0,
                  initial_first_window_size: int = 7,
@@ -79,6 +79,7 @@ class ProgressiveSelfForcingTrainingPipeline:
             noise: torch.Tensor,
             initial_latent: Optional[torch.Tensor] = None,
             return_sim_step: bool = False,
+            use_prior_exit_flag: bool = False, # stores the exit_flag in self.prior_exit_flags 
             **conditional_dict
     ) -> torch.Tensor:
         batch_size, num_frames, num_channels, height, width = noise.shape
@@ -139,7 +140,13 @@ class ProgressiveSelfForcingTrainingPipeline:
             all_num_frames[0] = self.first_window_size*self.num_frame_per_block
 
         num_denoising_steps = len(self.denoising_step_list)
-        exit_flags = self.generate_and_sync_list(len(all_num_frames), num_denoising_steps, device=noise.device)
+
+        if use_prior_exit_flag is False:
+            exit_flags = self.generate_and_sync_list(len(all_num_frames), num_denoising_steps, device=noise.device)
+        else:
+            exit_flags = self.prior_exit_flags
+        self.prior_exit_flags = exit_flags
+
         start_gradient_frame_index = num_output_frames - 21
         
         print(f"all_num_frames: {all_num_frames}")
@@ -243,7 +250,8 @@ class ProgressiveSelfForcingTrainingPipeline:
             denoised_timestep_from = 1000 - torch.argmin(
                 (self.scheduler.timesteps.cuda() - self.denoising_step_list[exit_flags[0]].cuda()).abs(), dim=0).item()
 
-            
+        # [][] remove after checking bounds
+        print(f"denoised_timestep_to: {denoised_timestep_to}", f"denoised_timestep_from: {denoised_timestep_from}")
         # clear caches to reduce memory.
         self.clear_kv_cache()
             

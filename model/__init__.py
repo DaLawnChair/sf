@@ -5,6 +5,7 @@ from .gan import GAN
 from .sid import SiD
 from .ode_regression import ODERegression
 from .progressive_dmd import ProgressiveDMD
+from .bidirectional_match_dmd import BidirectionalMatchDMD
 
 __all__ = [
     "CausalDiffusion",
@@ -13,5 +14,6 @@ __all__ = [
     "GAN",
     "SiD",
     "ODERegression",
-    "ProgressiveDMD"
+    "ProgressiveDMD",
+    "BidirectionalMatchDMD",
 ]

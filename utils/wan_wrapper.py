@@ -12,15 +12,14 @@ from wan.modules.causal_model import CausalWanModel
 
 # John: load from our own path
 import os
-# if 'shared' in os.environ["DATASET_PATH"]:
-#     FOLDER_PATH=os.path.join("/shared/huggingface/hub/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
-# else:
-#     FOLDER_PATH=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
 
-
-FOLDER_PATH_1_3B=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
-
-FOLDER_PATH_14B=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-14B/snapshots/a064a6c71f5be440641209c07bf2a5ce7a2ff5e4")
+## denotes using 188 server
+if 'shared' in os.environ["DATASET_PATH"]:
+    FOLDER_PATH_1_3B=os.path.join("/shared/huggingface/hub/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
+    FOLDER_PATH_14B=os.path.join("/shared/huggingface/hub/models--Wan-AI--Wan2.1-T2V-14B/snapshots/a064a6c71f5be440641209c07bf2a5ce7a2ff5e4")
+else:
+    FOLDER_PATH_1_3B=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-1.3B/snapshots/37ec512624d61f7aa208f7ea8140a131f93afc9a")
+    FOLDER_PATH_14B=os.path.join(os.environ["DATASET_PATH"],"john_wan2_1_t2v_1_3B/models--Wan-AI--Wan2.1-T2V-14B/snapshots/a064a6c71f5be440641209c07bf2a5ce7a2ff5e4")
 
 DEFAULT_FOLDER_PATH_FOR_MODULES = FOLDER_PATH_1_3B
 

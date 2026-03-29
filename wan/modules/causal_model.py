@@ -1,6 +1,4 @@
-# Note: taken directly from https://github.com/NVlabs/LongLive/blob/main/wan/modules/causal_model.py
-# Adopted from https://github.com/guandeh17/Self-Forcing
-# SPDX-License-Identifier: CC-BY-NC-SA-4.0
+
 from wan.modules.attention import attention
 from wan.modules.model import (
     WanRMSNorm,
@@ -19,9 +17,6 @@ import torch.nn as nn
 import torch
 import math
 import torch.distributed as dist
-# from utils.memory import gpu, get_cuda_free_memory_gb, DynamicSwapInstaller, log_gpu_memory
-
-# from utils.debug_option import DEBUG
 
 # wan 1.3B model has a weird channel / head configurations and require max-autotune to work with flexattention
 # see https://github.com/pytorch/pytorch/issues/133254
@@ -79,14 +74,8 @@ class CausalWanSelfAttention(nn.Module):
         self.sink_size = sink_size
         self.qk_norm = qk_norm
         self.eps = eps
-        # Support list/tuple local_attn_size by converting to list first (handles OmegaConf ListConfig)
-        if not isinstance(local_attn_size, int) and hasattr(local_attn_size, "__iter__"):
-            values = list(local_attn_size)
-        else:
-            values = [int(local_attn_size)]
-        non_neg_vals = [int(v) for v in values if int(v) != -1]
-        max_local = max(non_neg_vals) if len(non_neg_vals) > 0 else -1
-        self.max_attention_size = 32760 if max_local == -1 else max_local * 1560
+        self.max_attention_size = 32760 if local_attn_size == -1 else local_attn_size * 1560
+
         # layers
         self.q = nn.Linear(dim, dim)
         self.k = nn.Linear(dim, dim)
@@ -104,8 +93,7 @@ class CausalWanSelfAttention(nn.Module):
         block_mask,
         kv_cache=None,
         current_start=0,
-        cache_start=None,
-        sink_recache_after_switch=False
+        cache_start=None
     ):
         r"""
         Args:
@@ -216,147 +204,42 @@ class CausalWanSelfAttention(nn.Module):
             # If we are using local attention and the current KV cache size is larger than the local attention size, we need to truncate the KV cache
             kv_cache_size = kv_cache["k"].shape[1]
             num_new_tokens = roped_query.shape[1]
-            # if (not dist.is_initialized() or dist.get_rank() == 0) and DEBUG:
-            #     print("***********before attention***********")
-            #     print(f"kv_cache_size = {kv_cache_size / frame_seqlen}")
-            #     print(f"torch.is_grad_enabled() = {torch.is_grad_enabled()}")
-            #     print(f"current_end = {current_end / frame_seqlen}")
-            #     print(f"current_start = {current_start / frame_seqlen}")
-            #     print(f"kv_cache['global_end_index'] = {kv_cache['global_end_index']}")
-            #     print(f"kv_cache['local_end_index'] = {kv_cache['local_end_index']}")
-            #     print(f"num_new_tokens = {num_new_tokens}")
-
-            # Compute cache update parameters without modifying kv_cache directly
-            cache_update_info = None
-            is_recompute = current_end <= kv_cache["global_end_index"].item() and current_start > 0
             if self.local_attn_size != -1 and (current_end > kv_cache["global_end_index"].item()) and (
                     num_new_tokens + kv_cache["local_end_index"].item() > kv_cache_size):
                 # Calculate the number of new tokens added in this step
                 # Shift existing cache content left to discard oldest tokens
+                # Clone the source slice to avoid overlapping memory error
                 num_evicted_tokens = num_new_tokens + kv_cache["local_end_index"].item() - kv_cache_size
                 num_rolled_tokens = kv_cache["local_end_index"].item() - num_evicted_tokens - sink_tokens
-                # if (not dist.is_initialized() or dist.get_rank() == 0) and DEBUG:
-                #     print(f"need roll")
-                #     print(f"num_rolled_tokens: {num_rolled_tokens / frame_seqlen}")
-                #     print(f"num_evicted_tokens: {num_evicted_tokens / frame_seqlen}")
-                #     print(f"sink_tokens: {sink_tokens / frame_seqlen}")
-
-                # Compute updated local indices
+                kv_cache["k"][:, sink_tokens:sink_tokens + num_rolled_tokens] = \
+                    kv_cache["k"][:, sink_tokens + num_evicted_tokens:sink_tokens + num_evicted_tokens + num_rolled_tokens].clone()
+                kv_cache["v"][:, sink_tokens:sink_tokens + num_rolled_tokens] = \
+                    kv_cache["v"][:, sink_tokens + num_evicted_tokens:sink_tokens + num_evicted_tokens + num_rolled_tokens].clone()
+                # Insert the new keys/values at the end
                 local_end_index = kv_cache["local_end_index"].item() + current_end - \
                     kv_cache["global_end_index"].item() - num_evicted_tokens
                 local_start_index = local_end_index - num_new_tokens
-
-                # Construct full k, v for attention computation (without modifying the original cache)
-                # Create temporary k, v for computation
-                temp_k = kv_cache["k"].clone()
-                temp_v = kv_cache["v"].clone()
-                
-                # Apply rolling update to the temporary cache
-                temp_k[:, sink_tokens:sink_tokens + num_rolled_tokens] = \
-                    temp_k[:, sink_tokens + num_evicted_tokens:sink_tokens + num_evicted_tokens + num_rolled_tokens].clone()
-                temp_v[:, sink_tokens:sink_tokens + num_rolled_tokens] = \
-                    temp_v[:, sink_tokens + num_evicted_tokens:sink_tokens + num_evicted_tokens + num_rolled_tokens].clone()
-                
-                # Insert new key/value into the temporary cache
-                # Protect sink_tokens only during recomputation; regular forward generation allows writing into the initial sink region
-                write_start_index = max(local_start_index, sink_tokens) if is_recompute else local_start_index
-                roped_offset = max(0, write_start_index - local_start_index)
-                write_len = max(0, local_end_index - write_start_index)
-                if write_len > 0:
-                    temp_k[:, write_start_index:local_end_index] = roped_key[:, roped_offset:roped_offset + write_len]
-                    temp_v[:, write_start_index:local_end_index] = v[:, roped_offset:roped_offset + write_len]
-
-                # Save cache update info for later use
-                cache_update_info = {
-                    "action": "roll_and_insert",
-                    "sink_tokens": sink_tokens,
-                    "num_rolled_tokens": num_rolled_tokens,
-                    "num_evicted_tokens": num_evicted_tokens,
-                    "local_start_index": local_start_index,
-                    "local_end_index": local_end_index,
-                    "write_start_index": write_start_index,
-                    "write_end_index": local_end_index,
-                    "new_k": roped_key[:, roped_offset:roped_offset + write_len],
-                    "new_v": v[:, roped_offset:roped_offset + write_len],
-                    "current_end": current_end,
-                    "is_recompute": is_recompute
-                }
-
-                # if (not dist.is_initialized() or dist.get_rank() == 0) and DEBUG:
-                #     print(f"used kv cache size: local_end_index - local_start_index = {local_end_index - local_start_index}")
+                kv_cache["k"][:, local_start_index:local_end_index] = roped_key
+                kv_cache["v"][:, local_start_index:local_end_index] = v
             else:
                 # Assign new keys/values directly up to current_end
                 local_end_index = kv_cache["local_end_index"].item() + current_end - kv_cache["global_end_index"].item()
                 local_start_index = local_end_index - num_new_tokens
+                kv_cache["k"][:, local_start_index:local_end_index] = roped_key
+                kv_cache["v"][:, local_start_index:local_end_index] = v
 
-                # Construct full k, v for attention computation (without modifying the original cache)
-                temp_k = kv_cache["k"].clone()
-                temp_v = kv_cache["v"].clone()
-                # Protect sink_tokens only during recomputation; regular forward generation allows writing into the initial sink region
-                write_start_index = max(local_start_index, sink_tokens) if is_recompute else local_start_index
-                if sink_recache_after_switch:
-                    write_start_index = local_start_index
-                roped_offset = max(0, write_start_index - local_start_index)
-                write_len = max(0, local_end_index - write_start_index)
-                if write_len > 0:
-                    temp_k[:, write_start_index:local_end_index] = roped_key[:, roped_offset:roped_offset + write_len]
-                    temp_v[:, write_start_index:local_end_index] = v[:, roped_offset:roped_offset + write_len]
-
-                # Save cache update info for later use
-                cache_update_info = {
-                    "action": "direct_insert",
-                    "local_start_index": local_start_index,
-                    "local_end_index": local_end_index,
-                    "write_start_index": write_start_index,
-                    "write_end_index": local_end_index,
-                    "new_k": roped_key[:, roped_offset:roped_offset + write_len],
-                    "new_v": v[:, roped_offset:roped_offset + write_len],
-                    "current_end": current_end,
-                    "is_recompute": is_recompute
-                }
-
-            # if (not dist.is_initialized() or dist.get_rank() == 0) and DEBUG:
-            #     print(f"local_start_index: {local_start_index}, local_end_index: {local_end_index}")
-
-            # Use temporary k, v to compute attention
-            if sink_tokens > 0:
-                # Concatenate sink tokens and local window tokens, keeping total length strictly below max_attention_size
-                local_budget = self.max_attention_size - sink_tokens
-                k_sink = temp_k[:, :sink_tokens]
-                v_sink = temp_v[:, :sink_tokens]
-                # if (not dist.is_initialized() or dist.get_rank() == 0) and DEBUG:
-                #     print(f"local_budget: {local_budget}")
-                if local_budget > 0:
-                    local_start_for_window = max(sink_tokens, local_end_index - local_budget)
-                    k_local = temp_k[:, local_start_for_window:local_end_index]
-                    v_local = temp_v[:, local_start_for_window:local_end_index]
-                    k_cat = torch.cat([k_sink, k_local], dim=1)
-                    v_cat = torch.cat([v_sink, v_local], dim=1)
-                else:
-                    k_cat = k_sink
-                    v_cat = v_sink
-                x = attention(
-                    roped_query,
-                    k_cat,
-                    v_cat
-                )
-            else:
-                window_start = max(0, local_end_index - self.max_attention_size)
-                x = attention(
-                    roped_query,
-                    temp_k[:, window_start:local_end_index],
-                    temp_v[:, window_start:local_end_index]
-                )
+            x = attention(
+                roped_query,
+                kv_cache["k"][:, max(0, local_end_index - self.max_attention_size):local_end_index],
+                kv_cache["v"][:, max(0, local_end_index - self.max_attention_size):local_end_index]
+            )
+            kv_cache["global_end_index"].fill_(current_end)
+            kv_cache["local_end_index"].fill_(local_end_index)
 
         # output
         x = x.flatten(2)
         x = self.o(x)
-        
-        # Return both output and cache update info
-        if kv_cache is not None:
-            return x, (current_end, local_end_index, cache_update_info)
-        else:
-            return x
+        return x
 
 
 class CausalWanAttentionBlock(nn.Module):
@@ -412,8 +295,7 @@ class CausalWanAttentionBlock(nn.Module):
         kv_cache=None,
         crossattn_cache=None,
         current_start=0,
-        cache_start=None,
-        sink_recache_after_switch=False,
+        cache_start=None
     ):
         r"""
         Args:
@@ -430,16 +312,10 @@ class CausalWanAttentionBlock(nn.Module):
         # assert e[0].dtype == torch.float32
 
         # self-attention
-        self_attn_result = self.self_attn(
+        y = self.self_attn(
             (self.norm1(x).unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * (1 + e[1]) + e[0]).flatten(1, 2),
             seq_lens, grid_sizes,
-            freqs, block_mask, kv_cache, current_start, cache_start, sink_recache_after_switch)
-        
-        if kv_cache is not None:
-            y, cache_update_info = self_attn_result
-        else:
-            y = self_attn_result
-            cache_update_info = None
+            freqs, block_mask, kv_cache, current_start, cache_start)
 
         # with amp.autocast(dtype=torch.float32):
         x = x + (y.unflatten(dim=1, sizes=(num_frames, frame_seqlen)) * e[2]).flatten(1, 2)
@@ -458,12 +334,7 @@ class CausalWanAttentionBlock(nn.Module):
             return x
 
         x = cross_attn_ffn(x, context, context_lens, e, crossattn_cache)
-        
-        if cache_update_info is not None:
-            # cache_update_info is already in the format (current_end, local_end_index, cache_update_info)
-            return x, cache_update_info
-        else:
-            return x
+        return x
 
 
 class CausalHead(nn.Module):
@@ -674,8 +545,10 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                                        KV_LEN=total_length + padded_length, _compile=False, device=device)
 
         import torch.distributed as dist
-        if (not dist.is_initialized() or dist.get_rank() == 0) and DEBUG:
-            pass
+        if not dist.is_initialized() or dist.get_rank() == 0:
+            print(
+                f" cache a block wise causal mask with block size of {num_frame_per_block} frames")
+            print(block_mask)
 
         # import imageio
         # import numpy as np
@@ -699,11 +572,11 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         [1 latent frame] [1 latent frame] ... [1 latent frame]
         We use flexattention to construct the attention mask
         """
-        # # debug
-        # DEBUG = False
-        # if DEBUG:
-        #     num_frames = 9
-        #     frame_seqlen = 256
+        # debug
+        DEBUG = False
+        if DEBUG:
+            num_frames = 9
+            frame_seqlen = 256
 
         total_length = num_frames * frame_seqlen * 2
 
@@ -764,6 +637,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                                        KV_LEN=total_length + padded_length, _compile=False, device=device)
 
         if DEBUG:
+            print(block_mask)
             import imageio
             import numpy as np
             from torch.nn.attention.flex_attention import create_mask
@@ -821,7 +695,9 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                                        KV_LEN=total_length + padded_length, _compile=False, device=device)
 
         if not dist.is_initialized() or dist.get_rank() == 0:
-            pass
+            print(
+                f" cache a block wise causal mask with block size of {num_frame_per_block} frames")
+            print(block_mask)
 
         # import imageio
         # import numpy as np
@@ -835,60 +711,6 @@ class CausalWanModel(ModelMixin, ConfigMixin):
 
         return block_mask
 
-    def _apply_cache_updates(self, kv_cache, cache_update_infos):
-        """
-        Applies cache updates collected from multiple blocks.
-        Args:
-            kv_cache: List of cache dictionaries for each block
-            cache_update_infos: List of (block_index, cache_update_info) tuples
-        """
-        for block_index, (current_end, local_end_index, update_info) in cache_update_infos:
-            if update_info is not None:
-                cache = kv_cache[block_index]
-                
-                if update_info["action"] == "roll_and_insert":
-                    # Apply rolling update
-                    sink_tokens = update_info["sink_tokens"]
-                    num_rolled_tokens = update_info["num_rolled_tokens"]
-                    num_evicted_tokens = update_info["num_evicted_tokens"]
-                    local_start_index = update_info["local_start_index"]
-                    local_end_index = update_info["local_end_index"]
-                    write_start_index = update_info.get("write_start_index", local_start_index)
-                    write_end_index = update_info.get("write_end_index", local_end_index)
-                    new_k = update_info["new_k"]
-                    new_v = update_info["new_v"]
-                    
-                    # Perform the rolling operation
-                    cache["k"][:, sink_tokens:sink_tokens + num_rolled_tokens] = \
-                        cache["k"][:, sink_tokens + num_evicted_tokens:sink_tokens + num_evicted_tokens + num_rolled_tokens].clone()
-                    cache["v"][:, sink_tokens:sink_tokens + num_rolled_tokens] = \
-                        cache["v"][:, sink_tokens + num_evicted_tokens:sink_tokens + num_evicted_tokens + num_rolled_tokens].clone()
-                    
-                    # Insert new key/value
-                    if write_end_index > write_start_index and new_k.shape[1] == (write_end_index - write_start_index):
-                        cache["k"][:, write_start_index:write_end_index] = new_k
-                        cache["v"][:, write_start_index:write_end_index] = new_v
-                    
-                elif update_info["action"] == "direct_insert":
-                    # Direct insert
-                    local_start_index = update_info["local_start_index"]
-                    local_end_index = update_info["local_end_index"]
-                    write_start_index = update_info.get("write_start_index", local_start_index)
-                    write_end_index = update_info.get("write_end_index", local_end_index)
-                    new_k = update_info["new_k"]
-                    new_v = update_info["new_v"]
-                    
-                    # Insert new key/value
-                    if write_end_index > write_start_index and new_k.shape[1] == (write_end_index - write_start_index):
-                        cache["k"][:, write_start_index:write_end_index] = new_k
-                        cache["v"][:, write_start_index:write_end_index] = new_v
-            
-            # Update indices: do not roll back pointers during recomputation
-            is_recompute = False if update_info is None else update_info.get("is_recompute", False)
-            if not is_recompute:
-                kv_cache[block_index]["global_end_index"].fill_(current_end)
-                kv_cache[block_index]["local_end_index"].fill_(local_end_index)
-
     def _forward_inference(
         self,
         x,
@@ -900,8 +722,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         kv_cache: dict = None,
         crossattn_cache: dict = None,
         current_start: int = 0,
-        cache_start: int = 0,
-        sink_recache_after_switch=False
+        cache_start: int = 0
     ):
         r"""
         Run the diffusion model with kv caching.
@@ -937,12 +758,9 @@ class CausalWanModel(ModelMixin, ConfigMixin):
 
         if y is not None:
             x = [torch.cat([u, v], dim=0) for u, v in zip(x, y)]
-        
-        # print(f"x.device: {x[0].device}, t.device: {t.device}, context.device: {context.device}, seq_len: {seq_len}")
 
         # embeddings
         x = [self.patch_embedding(u.unsqueeze(0)) for u in x]
-        # print("patch embedding done")
         grid_sizes = torch.stack(
             [torch.tensor(u.shape[2:], dtype=torch.long) for u in x])
         x = [u.flatten(2).transpose(1, 2) for u in x]
@@ -963,7 +781,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         e0 = self.time_projection(e).unflatten(
             1, (6, self.dim)).unflatten(dim=0, sizes=t.shape)
         # assert e.dtype == torch.float32 and e0.dtype == torch.float32
-        # print("time embedding done")
+
         # context
         context_lens = None
         context = self.text_embedding(
@@ -972,7 +790,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                     [u, u.new_zeros(self.text_len - u.size(0), u.size(1))])
                 for u in context
             ]))
-        # print("text embedding done")
+
         if clip_fea is not None:
             context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
             context = torch.concat([context_clip, context], dim=1)
@@ -985,19 +803,15 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             freqs=self.freqs,
             context=context,
             context_lens=context_lens,
-            block_mask=self.block_mask,
-            sink_recache_after_switch=sink_recache_after_switch
+            block_mask=self.block_mask
         )
-        # print("kwargs done")
+
         def create_custom_forward(module):
             def custom_forward(*inputs, **kwargs):
                 return module(*inputs, **kwargs)
             return custom_forward
 
-        cache_update_info = None
-        cache_update_infos = []  # Collect cache update info for all blocks
         for block_index, block in enumerate(self.blocks):
-            # print(f"block_index: {block_index}")
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 kwargs.update(
                     {
@@ -1006,20 +820,11 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                         "cache_start": cache_start
                     }
                 )
-                # print(f"forward checkpointing")
-                result = torch.utils.checkpoint.checkpoint(
+                x = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(block),
                     x, **kwargs,
                     use_reentrant=False,
                 )
-                # Handle the result
-                if kv_cache is not None and isinstance(result, tuple):
-                    x, block_cache_update_info = result
-                    cache_update_infos.append((block_index, block_cache_update_info))
-                    # Extract base info for subsequent blocks (without concrete cache update details)
-                    cache_update_info = block_cache_update_info[:2]  # (current_end, local_end_index)
-                else:
-                    x = result
             else:
                 kwargs.update(
                     {
@@ -1029,20 +834,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                         "cache_start": cache_start
                     }
                 )
-                # print(f"forward no checkpointing")
-                result = block(x, **kwargs)
-                # Handle the result
-                if kv_cache is not None and isinstance(result, tuple):
-                    x, block_cache_update_info = result
-                    cache_update_infos.append((block_index, block_cache_update_info))
-                    # Extract base info for subsequent blocks (without concrete cache update details)
-                    cache_update_info = block_cache_update_info[:2]  # (current_end, local_end_index)
-                else:
-                    x = result
-        # log_gpu_memory(f"in _forward_inference: {x[0].device}")
-        # After all blocks are processed, apply cache updates in a single pass
-        if kv_cache is not None and cache_update_infos:
-            self._apply_cache_updates(kv_cache, cache_update_infos)
+                x = block(x, **kwargs)
 
         # head
         x = self.head(x, e.unflatten(dim=0, sizes=t.shape).unsqueeze(2))
@@ -1082,9 +874,6 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
-        pass
-        raise NotImplementedError()
-    
         if self.model_type == 'i2v':
             assert clip_fea is not None and y is not None
         # params
@@ -1200,6 +989,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
                 )
             else:
                 x = block(x, **kwargs)
+
         if clean_x is not None:
             x = x[:, x.shape[1] // 2:]
 

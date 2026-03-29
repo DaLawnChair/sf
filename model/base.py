@@ -110,7 +110,8 @@ class SelfForcingModel(BaseModel):
         self,
         image_or_video_shape,
         conditional_dict: dict,
-        initial_latent: torch.tensor = None
+        initial_latent: torch.tensor = None,
+        sampled_noise: torch.tensor = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Optionally simulate the generator's input from noise using backward simulation
@@ -152,9 +153,16 @@ class SelfForcingModel(BaseModel):
         # Sync num_generated_frames across all processes
         noise_shape[1] = num_generated_frames
 
+
+        # Update, store a verison of noise that is sampled by the caller.
+        if sampled_noise is not None:
+            assert sampled_noise.shape == tuple(noise_shape), f"Sampled noise shape {sampled_noise.shape} does not match the expected shape {tuple(noise_shape)}"
+            noise = sampled_noise
+        else:
+            noise = torch.randn(noise_shape, device=self.device, dtype=self.dtype)
+
         pred_image_or_video, denoised_timestep_from, denoised_timestep_to = self._consistency_backward_simulation(
-            noise=torch.randn(noise_shape,
-                              device=self.device, dtype=self.dtype),
+            noise=noise,
             **conditional_dict,
         )
         # Slice last 21 frames
@@ -216,7 +224,7 @@ class SelfForcingModel(BaseModel):
         We pass our FSDP-wrapped modules into the pipeline to save memory.
         """
 
-        if self.args.distribution_loss == "progressive_dmd":
+        if self.args.distribution_loss == "progressive_dmd" or self.args.distribution_loss == "bidirectional_match_dmd":
             self.inference_pipeline = ProgressiveSelfForcingTrainingPipeline(
                 denoising_step_list=self.denoising_step_list,
                 scheduler=self.scheduler,
