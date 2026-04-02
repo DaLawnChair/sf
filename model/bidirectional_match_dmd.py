@@ -348,7 +348,8 @@ class BidirectionalMatchDMD(SelfForcingModel):
         print("recreation_loss", recreation_loss)
         dmd_loss = dmd_loss + self.bidirectional_match_loss_weight * recreation_loss
 
-        dmd_log_dict.update({"recreation_loss": recreation_loss})
+        # dmd_log_dict.update({"recreation_loss": recreation_loss}) # 30/03/2026: forgot to detach loss here
+        dmd_log_dict.update({"recreation_loss": recreation_loss.detach()})
 
         return dmd_loss, dmd_log_dict
 
