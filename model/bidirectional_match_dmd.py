@@ -327,18 +327,18 @@ class BidirectionalMatchDMD(SelfForcingModel):
         print("Starting bidirectional match loss computation...")
         with torch.no_grad():
             
-            prior_first_window_size = self.inference_pipeline.initial_first_window_size
-            print("1.self.inference_pipeline.initial_first_window_size:",self.inference_pipeline.initial_first_window_size)
-            self.inference_pipeline.initial_first_window_size = 7 # do full bidirectional generation 
-            print("2.self.inference_pipeline.initial_first_window_size:",self.inference_pipeline.initial_first_window_size)
+            prior_first_window_size = self.inference_pipeline.first_window_size
+            print("1.self.inference_pipeline.first_window_size:",self.inference_pipeline.first_window_size)
+            self.inference_pipeline.first_window_size = 7 # do full bidirectional generation 
+            print("2.self.inference_pipeline.first_window_size:",self.inference_pipeline.first_window_size)
 
             generated_video_latents_bidirectional, bidirectional_denoised_timestep_from, bidirectional_denoised_timestep_to = self.inference_pipeline.inference_with_trajectory(
                 noise=sampled_noise,
                 **conditional_dict,
                 use_prior_exit_flag=True
             )
-            self.inference_pipeline.initial_first_window_size = prior_first_window_size
-            print("3.self.inference_pipeline.initial_first_window_size:",self.inference_pipeline.initial_first_window_size)
+            self.inference_pipeline.first_window_size = prior_first_window_size
+            print("3.self.inference_pipeline.first_window_size:",self.inference_pipeline.first_window_size)
 
         assert bidirectional_denoised_timestep_from == denoised_timestep_from and \
             bidirectional_denoised_timestep_to == denoised_timestep_to, \
