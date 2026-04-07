@@ -61,6 +61,10 @@ class BidirectionalMatchDMD(SelfForcingModel):
 
         self.bidirectional_match_loss_weight = getattr(args, "bidirectional_match_loss_weight", 0)
         print("self.bidirectional_match_loss_weight", self.bidirectional_match_loss_weight)
+
+
+        self.use_prior_sampled_noise_for_bidirecitonal_generation = getattr(args, "use_prior_sampled_noise_for_bidirecitonal_generation", False)
+        print("self.use_prior_sampled_noise_for_bidirecitonal_generation", self.use_prior_sampled_noise_for_bidirecitonal_generation)
         
 
     def get_latent_boundary_diff(self,latent):
@@ -332,13 +336,25 @@ class BidirectionalMatchDMD(SelfForcingModel):
             self.inference_pipeline.first_window_size = 7 # do full bidirectional generation 
             print("2.self.inference_pipeline.first_window_size:",self.inference_pipeline.first_window_size)
 
+
+            # convert sampled noise into format for bidirecitonal inference
+            sampled_noise_bidirecitonal_format = self.inference_pipeline.format_sampled_noise_for_bidirectional()
+            
+            self.inference_pipeline.sampled_noise = sampled_noise_bidirecitonal_format
+            
+            # verify that noise here are the same:
+            
             generated_video_latents_bidirectional, bidirectional_denoised_timestep_from, bidirectional_denoised_timestep_to = self.inference_pipeline.inference_with_trajectory(
                 noise=sampled_noise,
                 **conditional_dict,
-                use_prior_exit_flag=True
+                use_prior_exit_flag=True, # use the same # of denoising steps from before
+                use_prior_sampled_noise=self.use_prior_sampled_noise_for_bidirecitonal_generation, # use the same randomly sampled noise from before
             )
             self.inference_pipeline.first_window_size = prior_first_window_size
             print("3.self.inference_pipeline.first_window_size:",self.inference_pipeline.first_window_size)
+            self.inference_pipeline.sampled_noise = None
+
+
 
         assert bidirectional_denoised_timestep_from == denoised_timestep_from and \
             bidirectional_denoised_timestep_to == denoised_timestep_to, \
@@ -346,11 +362,12 @@ class BidirectionalMatchDMD(SelfForcingModel):
         
         recreation_loss = F.mse_loss(pred_image.double(), generated_video_latents_bidirectional.double(), reduction="mean")
         print("recreation_loss", recreation_loss)
+
         dmd_loss = dmd_loss + self.bidirectional_match_loss_weight * recreation_loss
 
         # dmd_log_dict.update({"recreation_loss": recreation_loss}) # 30/03/2026: forgot to detach loss here
-        dmd_log_dict.update({"recreation_loss": recreation_loss.detach()})
-
+        dmd_log_dict.update({"recreation_loss": torch.mean(recreation_loss).detach()}) 
+        
         return dmd_loss, dmd_log_dict
 
     def critic_loss(
