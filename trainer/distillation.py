@@ -413,12 +413,21 @@ class Trainer:
             if self.is_main_process:
                 wandb_loss_dict = {}
                 if TRAIN_GENERATOR:
-                    wandb_loss_dict.update(
-                        {
-                            "generator_loss": generator_log_dict["generator_loss"].mean().item(),
-                            "generator_grad_norm": generator_log_dict["generator_grad_norm"].mean().item(),
-                            "dmdtrain_gradient_norm": generator_log_dict["dmdtrain_gradient_norm"].mean().item()
+                    # wandb_loss_dict.update(
+                    #     {
+                    #         "generator_loss": generator_log_dict["generator_loss"].mean().item(),
+                    #         "generator_grad_norm": generator_log_dict["generator_grad_norm"].mean().item(),
+                    #         "dmdtrain_gradient_norm": generator_log_dict["dmdtrain_gradient_norm"].mean().item()
+                    #     }
+                    # )
+
+                    ## John 06/04/2026: log all generator loss components averaged, instead of just the total generator loss
+                    update_dict = {
+                            k:(v.mean().item() if torch.is_tensor(v) else v) for k,v in generator_log_dict.items() 
                         }
+                                        
+                    wandb_loss_dict.update(
+                        update_dict
                     )
 
                 wandb_loss_dict.update(
