@@ -65,6 +65,12 @@ class BidirectionalMatchDMD(SelfForcingModel):
 
         self.use_prior_sampled_noise_for_bidirecitonal_generation = getattr(args, "use_prior_sampled_noise_for_bidirecitonal_generation", False)
         print("self.use_prior_sampled_noise_for_bidirecitonal_generation", self.use_prior_sampled_noise_for_bidirecitonal_generation)
+        self.save_noise = self.use_prior_sampled_noise_for_bidirecitonal_generation
+        if self.save_noise:
+            print("load model earlier")
+            self._initialize_inference_pipeline()
+            self.inference_pipeline.save_noise = self.save_noise
+
         
 
     def get_latent_boundary_diff(self,latent):
@@ -336,13 +342,10 @@ class BidirectionalMatchDMD(SelfForcingModel):
             self.inference_pipeline.first_window_size = 7 # do full bidirectional generation 
             print("2.self.inference_pipeline.first_window_size:",self.inference_pipeline.first_window_size)
 
-
             # convert sampled noise into format for bidirecitonal inference
-            sampled_noise_bidirecitonal_format = self.inference_pipeline.format_sampled_noise_for_bidirectional()
-            
-            self.inference_pipeline.sampled_noise = sampled_noise_bidirecitonal_format
-            
-            # verify that noise here are the same:
+            if self.use_prior_sampled_noise_for_bidirecitonal_generation:
+                sampled_noise_bidirecitonal_format = self.inference_pipeline.format_sampled_noise_for_bidirectional()
+                self.inference_pipeline.sampled_noise = sampled_noise_bidirecitonal_format
             
             generated_video_latents_bidirectional, bidirectional_denoised_timestep_from, bidirectional_denoised_timestep_to = self.inference_pipeline.inference_with_trajectory(
                 noise=sampled_noise,

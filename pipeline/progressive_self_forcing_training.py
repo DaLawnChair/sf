@@ -56,7 +56,8 @@ class ProgressiveSelfForcingTrainingPipeline:
         
         # noised added when denoising chunk i for denoise step i
         self.sampled_noise = None
-        self.sampled_noise_for_bidirectional = None
+        self.save_noise = False # modified within bidirectional_match_dmd.py
+
 
 # import torch 
 # torch.manual_seed(42)
@@ -122,6 +123,28 @@ class ProgressiveSelfForcingTrainingPipeline:
 
         dist.broadcast(indices, src=0)  # Broadcast the random indices to all ranks
         return indices.tolist()
+
+
+    def obtain_random_noise(self, use_prior_sampled_noise, index, block_index, denoised_pred):
+
+        # standardized noise use prior sampled noise or new noise for the next step
+        if use_prior_sampled_noise and self.save_noise:
+            assert self.sampled_noise.shape[0] > index, f"ERROR: no sampled noise for denoise step {index} (largest is {self.sampled_noise.shape[0]})"
+            assert self.sampled_noise.shape[1] > block_index, f"ERROR: no sampled noise for block {block_index} at step {self.sampled_noise.shape[1]}"
+
+            noise_added = self.sampled_noise[index, block_index,...].to(device=denoised_pred.device)
+        else:
+            noise_added = torch.randn_like(denoised_pred.flatten(0, 1), dtype=denoised_pred.dtype, device=denoised_pred.device)
+
+        if self.save_noise:
+            try:
+                self.sampled_noise[index, block_index,...] = noise_added # update
+            except Exception as e:
+                print(f"Error when updating sampled_noise at index {index}, block_index {block_index}: {e}", 
+                    f"self.sampled_noise.shape: {self.sampled_noise.shape}, index: {index}, block_index: {block_index}", 
+                    f"noise_added.shape: {noise_added.shape}")
+                raise e
+        return noise_added
 
     def inference_with_trajectory(
             self,
@@ -202,9 +225,9 @@ class ProgressiveSelfForcingTrainingPipeline:
         print(f"all_num_frames: {all_num_frames}") 
 
         # denoising_steps performed (+1 for cache refresh), chunks, bs, T,C,H,W
-        if not use_prior_sampled_noise and self.same_step_across_blocks:
+        if not use_prior_sampled_noise and self.same_step_across_blocks and self.first_window_size==1 and self.save_noise:
             print('reset sampled_noise')
-            self.sampled_noise = torch.zeros([exit_flags[0]+1, len(all_num_frames), batch_size*self.num_frame_per_block, num_channels, height, width]) 
+            self.sampled_noise = torch.zeros([exit_flags[0]+1, len(all_num_frames), batch_size*self.num_frame_per_block, num_channels, height, width], dtype=noise.dtype) 
         
         # for block_index in range(num_blocks):
         for block_index, current_num_frames in enumerate(all_num_frames):
@@ -234,22 +257,7 @@ class ProgressiveSelfForcingTrainingPipeline:
                         )
                         assert not torch.isnan(denoised_pred).any().item(), f"nan on block_index={block_index}, STEP={current_timestep} of the output"
                         
-                        # standardized noise use prior sampled noise or new noise for the next step
-                        if use_prior_sampled_noise:
-                            assert self.sampled_noise.shape[0] > index, f"ERROR: no sampled noise for denoise step {index} (largest is {self.sampled_noise.shape[0]})"
-                            assert self.sampled_noise.shape[1] > block_index, f"ERROR: no sampled noise for block {block_index} at step {self.sampled_noise.shape[1]}"
-
-                            noise_added = self.sampled_noise[index, block_index,...].to(device=denoised_pred.device)
-                        else:
-                            noise_added = torch.randn_like(denoised_pred.flatten(0, 1))
-
-                        try:
-                            self.sampled_noise[index, block_index,...] = noise_added # update
-                        except Exception as e:
-                            print(f"Error when updating sampled_noise at index {index}, block_index {block_index}: {e}", 
-                                  f"self.sampled_noise.shape: {self.sampled_noise.shape}, index: {index}, block_index: {block_index}", 
-                                  f"noise_added.shape: {noise_added.shape}, exit_flags: {exit_flags}")
-                            raise e
+                        noise_added = self.obtain_random_noise(use_prior_sampled_noise, index, block_index, denoised_pred)
                         next_timestep = self.denoising_step_list[index + 1]
                         noisy_input = self.scheduler.add_noise(
                             denoised_pred.flatten(0, 1),
@@ -290,20 +298,8 @@ class ProgressiveSelfForcingTrainingPipeline:
             context_timestep = torch.ones_like(timestep) * self.context_noise
 
             # standardized noise use prior sampled noise or new noise for the next step
-            if use_prior_sampled_noise:
-                assert self.sampled_noise.shape[0] > index, f"ERROR: no sampled noise for denoise step {index} (largest is {self.sampled_noise.shape[0]})"
-                assert self.sampled_noise.shape[1] > block_index, f"ERROR: no sampled noise for block {block_index} at step {self.sampled_noise.shape[1]}"
+            noise_added = self.obtain_random_noise(use_prior_sampled_noise, index, block_index, denoised_pred)
 
-                noise_added = self.sampled_noise[index, block_index,...].to(device=denoised_pred.device)
-            else:
-                noise_added = torch.randn_like(denoised_pred.flatten(0, 1))
-            try:
-                self.sampled_noise[index, block_index,...] = noise_added # update
-            except Exception as e:
-                print(f"Error when updating sampled_noise at index {index}, block_index {block_index}: {e}", 
-                        f"self.sampled_noise.shape: {self.sampled_noise.shape}, index: {index}, block_index: {block_index}", 
-                        f"noise_added.shape: {noise_added.shape}, exit_flags: {exit_flags}")
-                raise e
             # add context noise
             denoised_pred = self.scheduler.add_noise(
                 denoised_pred.flatten(0, 1),
