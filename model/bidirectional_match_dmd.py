@@ -66,11 +66,6 @@ class BidirectionalMatchDMD(SelfForcingModel):
         self.use_prior_sampled_noise_for_bidirecitonal_generation = getattr(args, "use_prior_sampled_noise_for_bidirecitonal_generation", False)
         print("self.use_prior_sampled_noise_for_bidirecitonal_generation", self.use_prior_sampled_noise_for_bidirecitonal_generation)
         self.save_noise = self.use_prior_sampled_noise_for_bidirecitonal_generation
-        if self.save_noise:
-            print("load model earlier")
-            self._initialize_inference_pipeline()
-            self.inference_pipeline.save_noise = self.save_noise
-
         
 
     def get_latent_boundary_diff(self,latent):
@@ -309,6 +304,12 @@ class BidirectionalMatchDMD(SelfForcingModel):
             - generator_log_dict: a dictionary containing the intermediate tensors for logging.
         """
 
+        
+        if self.save_noise:
+            print("load model earlier")
+            self._initialize_inference_pipeline()
+            self.inference_pipeline.save_noise = self.save_noise
+            
         sampled_noise = torch.randn(image_or_video_shape, device=self.device, dtype=self.dtype)
         # Step 1: Unroll generator to obtain fake videos
         pred_image, gradient_mask, denoised_timestep_from, denoised_timestep_to = self._run_generator(
