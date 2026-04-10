@@ -66,6 +66,10 @@ class BidirectionalMatchDMD(SelfForcingModel):
         self.use_prior_sampled_noise_for_bidirecitonal_generation = getattr(args, "use_prior_sampled_noise_for_bidirecitonal_generation", False)
         print("self.use_prior_sampled_noise_for_bidirecitonal_generation", self.use_prior_sampled_noise_for_bidirecitonal_generation)
         self.save_noise = self.use_prior_sampled_noise_for_bidirecitonal_generation
+
+        self.compare_frame_differences = getattr(args, "compare_frame_differences", False)
+        print("self.compare_frame_differences", self.compare_frame_differences)
+        
         
 
     def get_latent_boundary_diff(self,latent):
@@ -75,8 +79,12 @@ class BidirectionalMatchDMD(SelfForcingModel):
         temp = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
         temp[3::3] = [3, 6, 9, 12, 15, 18]
         temp[2:-1:3] = [2, 5, 8, 11, 14, 17]
+        
+        taking temp[3::3]-temp[2:-1:3] should yield gradients updates for temp[3::3], since we want to match the prior to the current generation
         """
-        num_frames_per_chunk = 3
+        # assert self.inference_pipeline is not None, "Calling get_latent_boundary_diff() before intialized"
+        # num_frames_per_chunk = self.inference_pipeline.num_frames_per_chunk
+        num_frames_per_chunk = 3 # [][] hard coded 
         return latent[:, num_frames_per_chunk::num_frames_per_chunk, ...] - latent[:, num_frames_per_chunk-1:-1:num_frames_per_chunk, ...]
 
     def _compute_kl_grad(
@@ -268,7 +276,6 @@ class BidirectionalMatchDMD(SelfForcingModel):
                 
             
             dmd_loss = dmd_loss + self.latent_diff_coef * dmd_diff_loss
-            print("dmd_diff_loss", dmd_diff_loss)
             
         # compute raw latent difference, no grad used for DMD
         if self.enable_latent_diff:
@@ -276,9 +283,6 @@ class BidirectionalMatchDMD(SelfForcingModel):
             # takes zeros_like because diffence is already baked in
             dmd_loss = dmd_loss + self.latent_diff_coef * F.mse_loss(original_latent_diff, torch.zeros_like(original_latent_diff), reduction="mean")
             
-        # print('dmd_log_dict.keys()', dmd_log_dict.keys())
-        # assert self.enable_latent_diff and not self.enable_latent_grad_diff
-        
         return dmd_loss, dmd_log_dict
 
     def generator_loss(
@@ -304,9 +308,8 @@ class BidirectionalMatchDMD(SelfForcingModel):
             - generator_log_dict: a dictionary containing the intermediate tensors for logging.
         """
 
-        
+        # if wanting to save noise, need to add it as a parameter after loading as a minimally invasive approach
         if self.save_noise:
-            print("load model earlier")
             self._initialize_inference_pipeline()
             self.inference_pipeline.save_noise = self.save_noise
             
@@ -339,9 +342,7 @@ class BidirectionalMatchDMD(SelfForcingModel):
         with torch.no_grad():
             
             prior_first_window_size = self.inference_pipeline.first_window_size
-            print("1.self.inference_pipeline.first_window_size:",self.inference_pipeline.first_window_size)
             self.inference_pipeline.first_window_size = 7 # do full bidirectional generation 
-            print("2.self.inference_pipeline.first_window_size:",self.inference_pipeline.first_window_size)
 
             # convert sampled noise into format for bidirecitonal inference
             if self.use_prior_sampled_noise_for_bidirecitonal_generation:
@@ -355,21 +356,21 @@ class BidirectionalMatchDMD(SelfForcingModel):
                 use_prior_sampled_noise=self.use_prior_sampled_noise_for_bidirecitonal_generation, # use the same randomly sampled noise from before
             )
             self.inference_pipeline.first_window_size = prior_first_window_size
-            print("3.self.inference_pipeline.first_window_size:",self.inference_pipeline.first_window_size)
             self.inference_pipeline.sampled_noise = None
 
-
-
+        # should have the same timesteps
         assert bidirectional_denoised_timestep_from == denoised_timestep_from and \
             bidirectional_denoised_timestep_to == denoised_timestep_to, \
             "Denoised timestep from and to should be the same for bidirectional match loss"
         
-        recreation_loss = F.mse_loss(pred_image.double(), generated_video_latents_bidirectional.double(), reduction="mean")
-        print("recreation_loss", recreation_loss)
+
+        if self.compare_frame_differences:
+            recreation_loss = F.mse_loss(torch.diff(pred_image.double(), dim=1), torch.diff(generated_video_latents_bidirectional.double(), dim=1), reduction="mean")
+        else:
+            recreation_loss = F.mse_loss(pred_image.double(), generated_video_latents_bidirectional.double(), reduction="mean")
 
         dmd_loss = dmd_loss + self.bidirectional_match_loss_weight * recreation_loss
 
-        # dmd_log_dict.update({"recreation_loss": recreation_loss}) # 30/03/2026: forgot to detach loss here
         dmd_log_dict.update({"recreation_loss": torch.mean(recreation_loss).detach()}) 
         
         return dmd_loss, dmd_log_dict

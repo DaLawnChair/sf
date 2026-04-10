@@ -1,7 +1,8 @@
 """ 
-not many changes, adding self.progressive_enabled to represent if the progression and 
-self.first_window_size, the # of chunks that the will be denoised togheter as the prior
-
+Updates SelfForcingTrainingPipeline to:   
+* allocation of # of chunks to perform during denoising (self.first_window_size = 1 # default, standard SelfForcing training,) 
+    and self.first_window_size = 7 represents full bidirectional training (through denoising all 7 chunks at once) 
+* storage of sampled noise during generation
 """
 from utils.wan_wrapper import WanDiffusionWrapper
 from utils.scheduler import SchedulerInterface
@@ -75,6 +76,7 @@ class ProgressiveSelfForcingTrainingPipeline:
             [denoise_steps, num_chunks, bs*chunksize, C, H, W]
         into:
             [denoise_steps, num_chunks*bs*chunksize, C, H, W]
+        Note that bs>1 is not properly handled/tested
         """
         # flatten chunk axis and per-chunk batch axis
         sampled_noise_bidirectional_format = self.sampled_noise.flatten(1, 2)
@@ -83,11 +85,11 @@ class ProgressiveSelfForcingTrainingPipeline:
 
     def format_sampled_noise_for_causal(self):
         """
-        Note that bs>1 is note properly handled
         Convert:
             [denoise_steps, num_chunks*bs*chunksize, C, H, W]
         into:
             [denoise_steps, num_chunks, bs*chunksize, C, H, W]
+        Note that bs>1 is not properly handled/tested
         """
         denoise_steps, total_batch, C, H, W = self.sampled_noise.shape
         bs_chunksize = 1 * self.num_frame_per_block
@@ -126,6 +128,12 @@ class ProgressiveSelfForcingTrainingPipeline:
 
 
     def obtain_random_noise(self, use_prior_sampled_noise, index, block_index, denoised_pred):
+        """
+        This will either sample new noise or use the previously sampled noise (if use_prior_sampled_noise and self.save_noise are both True) 
+        for the current denoising step and block. The sampled noise will be stored in self.sampled_noise if self.save_noise is True.
+
+        this is to make the between two generations use the same sampled noise.
+        """
 
         # standardized noise use prior sampled noise or new noise for the next step
         if use_prior_sampled_noise and self.save_noise:
@@ -174,6 +182,8 @@ class ProgressiveSelfForcingTrainingPipeline:
         )
 
         if self.progressive_enabled: 
+            # if self.first_window_size = 1, then this is just standard SF denoising, if self.first_window_size = 7, then
+            # this equaltes to 1 singular block of 7 chunks (mimicing bidirectional inference)
             num_blocks = num_blocks - self.first_window_size +1
 
 
@@ -224,9 +234,9 @@ class ProgressiveSelfForcingTrainingPipeline:
         
         print(f"all_num_frames: {all_num_frames}") 
 
+        # refreshes sampled noise for new causal generation
         # denoising_steps performed (+1 for cache refresh), chunks, bs, T,C,H,W
         if not use_prior_sampled_noise and self.same_step_across_blocks and self.first_window_size==1 and self.save_noise:
-            print('reset sampled_noise')
             self.sampled_noise = torch.zeros([exit_flags[0]+1, len(all_num_frames), batch_size*self.num_frame_per_block, num_channels, height, width], dtype=noise.dtype) 
         
         # for block_index in range(num_blocks):
@@ -255,7 +265,6 @@ class ProgressiveSelfForcingTrainingPipeline:
                             crossattn_cache=self.crossattn_cache,
                             current_start=current_start_frame * self.frame_seq_length
                         )
-                        assert not torch.isnan(denoised_pred).any().item(), f"nan on block_index={block_index}, STEP={current_timestep} of the output"
                         
                         noise_added = self.obtain_random_noise(use_prior_sampled_noise, index, block_index, denoised_pred)
                         next_timestep = self.denoising_step_list[index + 1]
@@ -333,8 +342,6 @@ class ProgressiveSelfForcingTrainingPipeline:
             denoised_timestep_from = 1000 - torch.argmin(
                 (self.scheduler.timesteps.cuda() - self.denoising_step_list[exit_flags[0]].cuda()).abs(), dim=0).item()
 
-        # [][] remove after checking bounds
-        print(f"denoised_timestep_to: {denoised_timestep_to}", f"denoised_timestep_from: {denoised_timestep_from}")
         # clear caches to reduce memory.
         self.clear_kv_cache()
             

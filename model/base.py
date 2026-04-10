@@ -236,7 +236,8 @@ class SelfForcingModel(BaseModel):
                 num_max_frames=self.num_training_frames,
                 context_noise=self.args.context_noise,
                 initial_first_window_size=self.args.initial_first_window_size, 
-                progressive_enabled=True # new param, default is True
+                progressive_enabled=True,
+                kwargs={**self.args}
             )
             
         else:
