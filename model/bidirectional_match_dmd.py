@@ -67,8 +67,8 @@ class BidirectionalMatchDMD(SelfForcingModel):
         print("self.use_prior_sampled_noise_for_bidirecitonal_generation", self.use_prior_sampled_noise_for_bidirecitonal_generation)
         self.save_noise = self.use_prior_sampled_noise_for_bidirecitonal_generation
 
-        self.compare_frame_differences = getattr(args, "compare_frame_differences", False)
-        print("self.compare_frame_differences", self.compare_frame_differences)
+        self.bidirectional_match_compare_frame_differences = getattr(args, "bidirectional_match_compare_frame_differences", False)
+        print("self.bidirectional_match_compare_frame_differences", self.bidirectional_match_compare_frame_differences)
         
         
 
@@ -364,7 +364,7 @@ class BidirectionalMatchDMD(SelfForcingModel):
             "Denoised timestep from and to should be the same for bidirectional match loss"
         
 
-        if self.compare_frame_differences:
+        if self.bidirectional_match_compare_frame_differences:
             recreation_loss = F.mse_loss(torch.diff(pred_image.double(), dim=1), torch.diff(generated_video_latents_bidirectional.double(), dim=1), reduction="mean")
         else:
             recreation_loss = F.mse_loss(pred_image.double(), generated_video_latents_bidirectional.double(), reduction="mean")
