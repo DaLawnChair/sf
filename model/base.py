@@ -224,7 +224,9 @@ class SelfForcingModel(BaseModel):
         We pass our FSDP-wrapped modules into the pipeline to save memory.
         """
 
-        if self.args.distribution_loss == "progressive_dmd" or self.args.distribution_loss == "bidirectional_match_dmd":
+        if self.args.distribution_loss == "progressive_dmd" or \
+            self.args.distribution_loss == "bidirectional_match_dmd" or \
+            self.args.distribution_loss == "bidirectional_match_dmd_tf":
             self.inference_pipeline = ProgressiveSelfForcingTrainingPipeline(
                 denoising_step_list=self.denoising_step_list,
                 scheduler=self.scheduler,

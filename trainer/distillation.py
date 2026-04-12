@@ -16,7 +16,7 @@ from utils.misc import (
 )
 import torch.distributed as dist
 from omegaconf import OmegaConf
-from model import CausVid, DMD, SiD, BidirectionalMatchDMD
+from model import CausVid, DMD, SiD, BidirectionalMatchDMD, BidirectionalMatchDMDTeacherForcing
 import torch
 import wandb
 import time
@@ -93,6 +93,8 @@ class Trainer:
             self.model = SiD(config, device=self.device)
         elif config.distribution_loss == "bidirectional_match_dmd":
             self.model = BidirectionalMatchDMD(config, device=self.device)
+        elif config.distribution_loss == "bidirectional_match_dmd_tf":
+            self.model = BidirectionalMatchDMDTeacherForcing(config, device=self.device)
         else:
             raise ValueError("Invalid distribution matching loss")
 
