@@ -443,7 +443,7 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
                     recreation_loss = F.mse_loss(tf_generation, generated_video_latents_bidirectional.detach(), 
                                                                    reduction="none").mean(dim=(2, 3, 4))
                     chunk_scaling = torch.repeat_interleave(
-                        torch.linspace(1.0, self.chunk_scale_min, steps=num_blocks, device=recreation_loss.device),
+                        torch.linspace(self.chunk_scale_min, 1.0, steps=num_blocks, device=recreation_loss.device),
                         self.num_frame_per_block, dim=0
                     )
                     recreation_loss = recreation_loss * chunk_scaling
