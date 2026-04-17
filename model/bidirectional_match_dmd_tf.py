@@ -65,7 +65,7 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
 
         self.use_prior_sampled_noise_for_bidirecitonal_generation = getattr(args, "use_prior_sampled_noise_for_bidirecitonal_generation", False)
         print("self.use_prior_sampled_noise_for_bidirecitonal_generation", self.use_prior_sampled_noise_for_bidirecitonal_generation)
-        self.save_noise = self.use_prior_sampled_noise_for_bidirecitonal_generation
+        self.save_noise = getattr(args, "save_noise", False)
 
 
         self.teacher_forcing = getattr(args, "teacher_forcing", False)
@@ -73,7 +73,23 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
             print("Using teacher forcing as a loss")
         else:
             print("Using diffusion forcing as a loss")
-        
+
+        # have better data with using all 4 denoising steps
+        self.perform_all_denoising_steps_for_bidirectional_generation = getattr(args, "perform_all_denoising_steps_for_bidirectional_generation", False)
+        # for enabling teacher forcing, with flow loss instead of MSE on x0 pred
+        self.tf_noised_latent = getattr(args, "tf_noised_latent", False)
+        self.tf_perform_all_steps = getattr(args, "tf_perform_all_steps", False)
+
+
+        self.scale_earlier_chunks = getattr(args, "scale_earlier_chunks", False)
+        self.chunk_scale_min = getattr(args, "chunk_scale_min", 0.1)
+        print("perform_all_denoising_steps_for_bidirectional_generation:", self.perform_all_denoising_steps_for_bidirectional_generation,
+              "tf_noised_latent:", self.tf_noised_latent,
+              "tf_perform_all_steps:", self.tf_perform_all_steps
+        )
+
+
+
 
     def get_latent_boundary_diff(self,latent):
         """
@@ -164,7 +180,7 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
         if self.enable_latent_grad_diff:
             
             pred_fake_image_diff = self.get_latent_boundary_diff(pred_fake_image)
-            pred_real_image_diff = self.get_latent_boundary_diff(pred_real_image_diff)
+            pred_real_image_diff = self.get_latent_boundary_diff(pred_real_image)
             grad_diff = (pred_fake_image_diff - pred_real_image_diff)
             
             if normalization:
@@ -327,6 +343,7 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
 
         assert isinstance(self.inference_pipeline, ProgressiveSelfForcingTrainingPipeline), "Inference pipeline should be an instance of ProgressiveSelfForcingTrainingPipeline for bidirectional match loss"
         
+
         # Step 2: Compute the DMD loss
         dmd_loss, dmd_log_dict = self.compute_distribution_matching_loss(
             image_or_video=pred_image,
@@ -336,11 +353,8 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
             denoised_timestep_from=denoised_timestep_from,
             denoised_timestep_to=denoised_timestep_to
         )
-        
-        assert not torch.isnan(dmd_loss.double()).any().item(), "Error: dmd_loss has Nan"
 
 
-        # [][] generate videos with bidirectional mode:
         print("Starting bidirectional match loss computation...")
         with torch.no_grad():
             
@@ -352,6 +366,10 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
                 sampled_noise_bidirecitonal_format = self.inference_pipeline.format_sampled_noise_for_bidirectional()
                 self.inference_pipeline.sampled_noise = sampled_noise_bidirecitonal_format
             
+            # when basing generation off of a bidirecitonal history, perform all denoising steps
+            if self.perform_all_denoising_steps_for_bidirectional_generation: 
+                self.inference_pipeline.prior_exit_flags = [len(self.inference_pipeline.denoising_step_list)-1 for _ in range(len(self.inference_pipeline.prior_exit_flags))]
+
             generated_video_latents_bidirectional, bidirectional_denoised_timestep_from, bidirectional_denoised_timestep_to = self.inference_pipeline.inference_with_trajectory(
                 noise=sampled_noise,
                 **conditional_dict,
@@ -359,35 +377,91 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
                 use_prior_sampled_noise=self.use_prior_sampled_noise_for_bidirecitonal_generation, # use the same randomly sampled noise from before
             )
             self.inference_pipeline.first_window_size = prior_first_window_size
-            # restore the original noise after bidirectional generation
-            self.inference_pipeline.sampled_noise = self.inference_pipeline.format_sampled_noise_for_causal()
+            if self.save_noise:
+                # restore the original noise after bidirectional generation
+                self.inference_pipeline.sampled_noise = self.inference_pipeline.format_sampled_noise_for_causal()
             
-        # should have the same timesteps
-        assert bidirectional_denoised_timestep_from == denoised_timestep_from and \
-            bidirectional_denoised_timestep_to == denoised_timestep_to, \
-            "Denoised timestep from and to should be the same for bidirectional match loss"
-        
         # perform teacher/diffusion forcing generation with bidirectional generation as the clean signal
         if self.teacher_forcing:
-            print("perform generation with tf")
-            tf_generation, denoised_timestep_from, denoised_timestep_to = self.inference_pipeline.inference_replace_history(
-                noise=sampled_noise,
-                clean_history=generated_video_latents_bidirectional,
-                use_tf=self.teacher_forcing,
-                **conditional_dict,
-                use_prior_exit_flag=True, # use the same # of denoising steps from before
-                use_prior_sampled_noise=self.use_prior_sampled_noise_for_bidirecitonal_generation, # use the same randomly sampled noise from before
-            )
+            # main idea: follow more closely to teacher forcing, and give the bidirecitonal_gen+noise as the noise used and ask it to perform an denoising step
+            if self.tf_noised_latent:
+                num_blocks = self.inference_pipeline.get_num_blocks(generated_video_latents_bidirectional)
+
+                # noise to a timestep of 0 to 2, exclude the last timestep
+                noised_timesteps = self.inference_pipeline.generate_and_sync_list(num_blocks, len(self.inference_pipeline.denoising_step_list)-1, 
+                                                                        generated_video_latents_bidirectional.device)
+                print("noised_timesteps:",noised_timesteps)
+                # get timestep 
+                noised_timesteps = (self.inference_pipeline.denoising_step_list[noised_timesteps] * torch.ones(
+                        [generated_video_latents_bidirectional.shape[1] // self.num_frame_per_block], 
+                        dtype=torch.long) ).to(device=generated_video_latents_bidirectional.device)
+                noise = torch.randn_like(generated_video_latents_bidirectional)
+            
+                noisy_latent = self.scheduler.add_noise(
+                    generated_video_latents_bidirectional.flatten(0, 1),
+                    noise.flatten(0, 1),
+                    torch.repeat_interleave(noised_timesteps, self.num_frame_per_block, dim=0)
+                ).unflatten(0, generated_video_latents_bidirectional.shape[:2])
+
+                # choice of doing all the same denoising steps or do the next timesteps
+                if self.tf_perform_all_steps:
+                    end_timestep = self.inference_pipeline.denoising_step_list[-1] * torch.ones_like(noised_timesteps)
+                else:
+                    end_timestep = noised_timesteps 
+
+                tf_pred = self.inference_pipeline.inference_from_clean_noised(
+                        noise=noisy_latent,
+                        clean_history=generated_video_latents_bidirectional,
+                        noised_timesteps=noised_timesteps.cpu(),
+                        end_timestep=end_timestep.cpu(),
+                        use_tf=True,
+                        **conditional_dict
+                ) 
+
+
+                # loss = torch.nn.functional.mse_loss(flow_pred.float(), training_target.float())
+                tf_loss = torch.nn.functional.mse_loss(
+                    tf_pred.double(), generated_video_latents_bidirectional.double(), reduction='mean'
+                )
+
+                print("tf_loss", tf_loss.item())
+                dmd_loss = dmd_loss + self.bidirectional_match_loss_weight * tf_loss
+                dmd_log_dict.update({"tf_loss": torch.mean(tf_loss).detach()}) 
+
+            else: # perform kv-cache replacement with MSE loss comparison over x0 predictions  
+                print("perform generation with tf")
+                tf_generation, denoised_timestep_from, denoised_timestep_to = self.inference_pipeline.inference_replace_history(
+                    noise=sampled_noise,
+                    clean_history=generated_video_latents_bidirectional.detach(),
+                    use_tf=self.teacher_forcing,
+                    **conditional_dict,
+                    use_prior_exit_flag=True, # use the same # of denoising steps from before
+                    use_prior_sampled_noise=self.use_prior_sampled_noise_for_bidirecitonal_generation, # use the same randomly sampled noise from before
+                )
+
+                if self.scale_earlier_chunks:
+                    recreation_loss = F.mse_loss(tf_generation, generated_video_latents_bidirectional.detach(), 
+                                                                   reduction="none").mean(dim=(2, 3, 4))
+                    chunk_scaling = torch.repeat_interleave(
+                        torch.linspace(1.0, self.chunk_scale_min, steps=num_blocks, device=recreation_loss.device),
+                        self.num_frame_per_block, dim=0
+                    )
+                    recreation_loss = recreation_loss * chunk_scaling
+                    recreation_loss = recreation_loss.mean()
+                else:
+                    recreation_loss = F.mse_loss(tf_generation, generated_video_latents_bidirectional.detach(), 
+                                                                   reduction="mean")
+                print("recreation_loss", recreation_loss.item())
+                dmd_loss = dmd_loss + self.bidirectional_match_loss_weight * recreation_loss
+                dmd_log_dict.update({"recreation_loss": torch.mean(recreation_loss).detach()}) 
+
         else:
             raise NotImplementedError("Diffusion forcing is not implemented yet, please set teacher_forcing to True to use teacher forcing")
-        
+    
 
-        recreation_loss = F.mse_loss(tf_generation, generated_video_latents_bidirectional.detach(), reduction="mean")
-        print("recreation_loss", recreation_loss.item())
-        dmd_loss = dmd_loss + self.bidirectional_match_loss_weight * recreation_loss
-
-        dmd_log_dict.update({"recreation_loss": torch.mean(recreation_loss).detach()}) 
-        
+        # for key in dmd_log_dict:
+        #     if torch.is_tensor(dmd_log_dict[key]):
+        #         dmd_log_dict[key] = dmd_log_dict[key].cpu()
         return dmd_loss, dmd_log_dict
 
     def critic_loss(

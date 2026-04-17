@@ -161,7 +161,7 @@ class BidirectionalMatchDMD(SelfForcingModel):
         if self.enable_latent_grad_diff:
             
             pred_fake_image_diff = self.get_latent_boundary_diff(pred_fake_image)
-            pred_real_image_diff = self.get_latent_boundary_diff(pred_real_image_diff)
+            pred_real_image_diff = self.get_latent_boundary_diff(pred_real_image)
             grad_diff = (pred_fake_image_diff - pred_real_image_diff)
             
             if normalization:
@@ -363,7 +363,6 @@ class BidirectionalMatchDMD(SelfForcingModel):
             bidirectional_denoised_timestep_to == denoised_timestep_to, \
             "Denoised timestep from and to should be the same for bidirectional match loss"
         
-
         if self.bidirectional_match_compare_frame_differences:
             recreation_loss = F.mse_loss(torch.diff(pred_image.double(), dim=1), torch.diff(generated_video_latents_bidirectional.double(), dim=1), reduction="mean")
         else:
