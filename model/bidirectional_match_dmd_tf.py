@@ -83,11 +83,13 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
 
         self.scale_earlier_chunks = getattr(args, "scale_earlier_chunks", False)
         self.chunk_scale_min = getattr(args, "chunk_scale_min", 0.1)
+        self.use_trainer_weighted_loss = getattr(args, "use_trainer_weighted_loss", False)
+
         print("perform_all_denoising_steps_for_bidirectional_generation:", self.perform_all_denoising_steps_for_bidirectional_generation,
               "tf_noised_latent:", self.tf_noised_latent,
-              "tf_perform_all_steps:", self.tf_perform_all_steps
+              "tf_perform_all_steps:", self.tf_perform_all_steps,
+              "use_trainer_weighted_loss:", self.use_trainer_weighted_loss
         )
-
 
 
 
@@ -418,19 +420,9 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
                         **conditional_dict
                 ) 
 
-
-                # loss = torch.nn.functional.mse_loss(flow_pred.float(), training_target.float())
-                tf_loss = torch.nn.functional.mse_loss(
-                    tf_pred.double(), generated_video_latents_bidirectional.double(), reduction='mean'
-                )
-
-                print("tf_loss", tf_loss.item())
-                dmd_loss = dmd_loss + self.bidirectional_match_loss_weight * tf_loss
-                dmd_log_dict.update({"tf_loss": torch.mean(tf_loss).detach()}) 
-
             else: # perform kv-cache replacement with MSE loss comparison over x0 predictions  
                 print("perform generation with tf")
-                tf_generation, denoised_timestep_from, denoised_timestep_to = self.inference_pipeline.inference_replace_history(
+                tf_pred, denoised_timestep_from, denoised_timestep_to = self.inference_pipeline.inference_replace_history(
                     noise=sampled_noise,
                     clean_history=generated_video_latents_bidirectional.detach(),
                     use_tf=self.teacher_forcing,
@@ -439,29 +431,35 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
                     use_prior_sampled_noise=self.use_prior_sampled_noise_for_bidirecitonal_generation, # use the same randomly sampled noise from before
                 )
 
-                if self.scale_earlier_chunks:
-                    recreation_loss = F.mse_loss(tf_generation, generated_video_latents_bidirectional.detach(), 
-                                                                   reduction="none").mean(dim=(2, 3, 4))
-                    chunk_scaling = torch.repeat_interleave(
-                        torch.linspace(self.chunk_scale_min, 1.0, steps=num_blocks, device=recreation_loss.device),
-                        self.num_frame_per_block, dim=0
-                    )
-                    recreation_loss = recreation_loss * chunk_scaling
-                    recreation_loss = recreation_loss.mean()
-                else:
-                    recreation_loss = F.mse_loss(tf_generation, generated_video_latents_bidirectional.detach(), 
-                                                                   reduction="mean")
-                print("recreation_loss", recreation_loss.item())
-                dmd_loss = dmd_loss + self.bidirectional_match_loss_weight * recreation_loss
-                dmd_log_dict.update({"recreation_loss": torch.mean(recreation_loss).detach()}) 
-
         else:
             raise NotImplementedError("Diffusion forcing is not implemented yet, please set teacher_forcing to True to use teacher forcing")
     
 
-        # for key in dmd_log_dict:
-        #     if torch.is_tensor(dmd_log_dict[key]):
-        #         dmd_log_dict[key] = dmd_log_dict[key].cpu()
+        assert not(self.scale_earlier_chunks and self.enable_latent_diff), "do not enable scaling and latent diff currently"
+
+
+        recreation_loss = F.mse_loss(tf_pred, generated_video_latents_bidirectional.detach(), 
+                                                        reduction="none").mean(dim=(2, 3, 4))
+        
+        if self.scale_earlier_chunks:
+            chunk_scaling = torch.repeat_interleave(
+                torch.linspace(self.chunk_scale_min, 1.0, steps=num_blocks, device=recreation_loss.device),
+                self.num_frame_per_block, dim=0
+            )
+            recreation_loss = recreation_loss * chunk_scaling
+        
+        if self.use_trainer_weighted_loss:
+            assert noised_timesteps is not None, "noised_timesteps should not be None when scale_earlier_chunks is True"
+
+            repeated_noised_timestep = torch.repeat_interleave(noised_timesteps, self.num_frame_per_block, dim=0)
+            training_weight = self.scheduler.training_weight(repeated_noised_timestep)
+            recreation_loss = recreation_loss * training_weight
+        
+        recreation_loss = recreation_loss.mean()
+        print("tf_loss", recreation_loss.item())
+        dmd_loss = dmd_loss + self.bidirectional_match_loss_weight * recreation_loss
+        dmd_log_dict.update({"tf_loss": torch.mean(recreation_loss).detach()}) 
+
         return dmd_loss, dmd_log_dict
 
     def critic_loss(
