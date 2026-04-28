@@ -189,7 +189,9 @@ class ProgressiveSelfForcingTrainingPipeline:
             return_sim_step: bool = False,
             use_prior_exit_flag: bool = False, # stores the exit_flag in self.prior_exit_flags,
             use_prior_sampled_noise: bool = False, # use the noise added during the denoising process instead of adding new noise 
-            **conditional_dict
+            store_all_generations: bool = False, # stored as list[torch.tensor(generations)]
+            **conditional_dict,
+
     ) -> torch.Tensor:
         batch_size, num_frames, num_channels, height, width = noise.shape
         if not self.independent_first_frame or (self.independent_first_frame and initial_latent is not None):
@@ -267,6 +269,10 @@ class ProgressiveSelfForcingTrainingPipeline:
         if not use_prior_sampled_noise and self.same_step_across_blocks and self.first_window_size==1 and self.save_noise:
             self.sampled_noise = torch.zeros([exit_flags[0]+1, len(all_num_frames), batch_size*self.num_frame_per_block, num_channels, height, width], dtype=noise.dtype) 
         
+
+        if store_all_generations:
+            generation_storage = [[] for i in range(len(all_num_frames))]
+
         # for block_index in range(num_blocks):
         for block_index, current_num_frames in enumerate(all_num_frames):
             noisy_input = noise[
@@ -302,6 +308,8 @@ class ProgressiveSelfForcingTrainingPipeline:
                             next_timestep * torch.ones(
                                 [batch_size * current_num_frames], device=noise.device, dtype=torch.long)
                         ).unflatten(0, denoised_pred.shape[:2])
+                        if store_all_generations:
+                            generation_storage[block_index].append(denoised_pred)
                 else:
                     # for getting real output
                     # with torch.set_grad_enabled(current_start_frame >= start_gradient_frame_index):
@@ -324,6 +332,8 @@ class ProgressiveSelfForcingTrainingPipeline:
                             crossattn_cache=self.crossattn_cache,
                             current_start=current_start_frame * self.frame_seq_length
                         )
+                    if store_all_generations:
+                        generation_storage[block_index].append(denoised_pred)
                     break
 
             # Step 3.2: record the model's output
@@ -376,6 +386,8 @@ class ProgressiveSelfForcingTrainingPipeline:
         if return_sim_step:
             return output, denoised_timestep_from, denoised_timestep_to, exit_flags[0] + 1
 
+        if store_all_generations:
+            return output, denoised_timestep_from, denoised_timestep_to, generation_storage
         return output, denoised_timestep_from, denoised_timestep_to
 
     
