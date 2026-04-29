@@ -11,10 +11,9 @@ if  [[ -z "${JOHN_MODE_FOR_TRAINING}" ]]; then
     source ./get_paths.sh web $run_task_folder
     cd $TASK_RUN_REPO
     echo "echo $qwen3_vl_files"
-
     
 else
-    source ./get_paths.sh web $run_task_folder
+    source ./get_paths.sh 188 $run_task_folder
 fi
 
 
@@ -92,8 +91,8 @@ echo "[DIST] NNODES=$NNODES NODE_RANK=$NODE_RANK MASTER_ADDR=$MASTER_ADDR MASTER
 # export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
 # nproc_per_node=8
 
-export CUDA_VISIBLE_DEVICES="0,1"
-nproc_per_node=2
+export CUDA_VISIBLE_DEVICES="4,5,6,7"
+nproc_per_node=4
 
 NNODES=1
 

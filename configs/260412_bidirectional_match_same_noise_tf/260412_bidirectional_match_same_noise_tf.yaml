@@ -2,7 +2,7 @@
 generator_fsdp_wrap_strategy: size
 real_score_fsdp_wrap_strategy: size
 fake_score_fsdp_wrap_strategy: size
-real_name: Wan2.1-T2V-14B
+real_name: Wan2.1-T2V-1.3B
 text_encoder_fsdp_wrap_strategy: size
 denoising_step_list:
 - 1000
@@ -56,7 +56,7 @@ gradient_accumulation_steps: 8 # across 8gpus, effective bs=64
 
 
 
-bidirectional_match_loss_weight: 1.0
+bidirectional_match_loss_weight: 0.1
 initial_first_window_size : 1 
 
 use_prior_sampled_noise_for_bidirecitonal_generation : true

@@ -295,7 +295,7 @@ class Trainer:
             # generator_log_dict.update({"generator_loss": generator_loss, # keep original
             #                            "generator_grad_norm": generator_grad_norm})
 
-            generator_log_dict.update({"generator_loss": generator_loss, # keep original
+            generator_log_dict.update({"generator_loss": generator_loss.detach().cpu(), # keep original
                                        "generator_grad_norm": torch.tensor(0.0, device=self.device)}) # clip performed after accumulation
             return generator_log_dict
         else:
@@ -315,7 +315,7 @@ class Trainer:
         #     self.max_grad_norm_critic)
         # critic_log_dict.update({"critic_loss": critic_loss, # log original loss
         #                         "critic_grad_norm": critic_grad_norm})
-        critic_log_dict.update({"critic_loss": critic_loss, # log original loss
+        critic_log_dict.update({"critic_loss": critic_loss.detach().cpu(), # log original loss
                                 "critic_grad_norm": torch.tensor(0.0, device=self.device)}) # clip performed after accumulation
         return critic_log_dict
 
@@ -348,7 +348,18 @@ class Trainer:
         )
         current_video = video.permute(0, 1, 3, 4, 2).cpu().numpy() * 255.0
         return current_video
+    
 
+    def inspect_log_dict(self, name, d):
+        
+        if isinstance(d, list) and self.is_main_process:
+            for k, v in d[0].items():
+                if isinstance(v, torch.Tensor):
+                    print(
+                        f"{name}[{k}] shape={tuple(v.shape)} "
+                        f"device={v.device} requires_grad={v.requires_grad} "
+                        f"grad_fn={type(v.grad_fn).__name__ if v.grad_fn is not None else None}"
+                    )
     def train(self):
         start_step = self.step
 
@@ -363,7 +374,8 @@ class Trainer:
 
             accumulated_generator_logs = []
             accumulated_critic_logs = []
-
+            
+            # 16/04/2026 john: decouple dmd and critic updates
             for accumulation_step in range(self.gradient_accumulation_steps):
                 print(f"======== step: {self.step+1} == On accumulation_step: {accumulation_step+1} ========")
                 batch = next(self.dataloader)
@@ -371,11 +383,12 @@ class Trainer:
                     extra_gen = self.fwdbwd_one_step(batch, True)
                     print("done generator generation")
                     accumulated_generator_logs.append(extra_gen)
+                    print("inspect_log_dict:",self.inspect_log_dict("accumulated_generator_logs", accumulated_generator_logs))
 
+                batch = next(self.dataloader)
                 extra_crit = self.fwdbwd_one_step(batch, False)
                 print("done critic generation")
-                accumulated_critic_logs.append(extra_crit)
-
+                accumulated_critic_logs.append(extra_crit)  
             # compute grad norm and update params
             if TRAIN_GENERATOR:
                 generator_grad_norm = self.model.generator.clip_grad_norm_(self.max_grad_norm_generator)

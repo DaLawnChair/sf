@@ -479,10 +479,9 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
             # training_weight = self.scheduler.training_weight(repeated_end_timestep) # scaled for 1000 step flow matching, not our generation
             # training_weight = self.scheduler.sigmas[]
 
-            denoising_step_list_pos = [ self.original_denoising_step_list[pos] for pos in end_timestep_indicies]
-            training_weight = self.scheduler.sigmas[denoising_step_list_pos] ** 2
+            import ipdb;ipdb.set_trace()            
+            training_weight = self.get_snr_training_weight(end_timestep_indicies)
             repeated_training_weight = torch.repeat_interleave(training_weight, self.num_frame_per_block, dim=0)
-
             recreation_loss = recreation_losses * repeated_training_weight
         
 
@@ -500,6 +499,25 @@ class BidirectionalMatchDMDTeacherForcing(SelfForcingModel):
 
         return dmd_loss, dmd_log_dict
 
+    def get_snr_training_weight(self, end_timestep_indicies):
+        """
+        Calculates the SNR scaling for the loss based on each chunk's ending timestep.
+
+        SNR(t) = alpha_t^2 / sigma_t^2, where alpha_t=(1-t) and sigma_t = t for the linear scheduler Wan uses. 
+        params: 
+            end_timestep_indicies: list of indicies corresponding to the denoising step.
+        return:
+            snr: the SNR scaling for the loss, shape [B, num_blocks]
+        """
+        denoising_step_list_pos = torch.Tensor([ self.original_denoising_step_list[pos] for pos in end_timestep_indicies])
+        # training_weight = self.scheduler.sigmas[denoising_step_list_pos] ** 2
+        # training_weight = self.scheduler.timesteps[self.scheduler.num_denoising_steps - denoising_step_list_pos] ** 2
+        num_timesteps = len(self.scheduler.timesteps)
+        sigma_t = self.scheduler.timesteps[(-denoising_step_list_pos + num_timesteps).long()]
+        alpha_t = (1-self.scheduler.timesteps[(-denoising_step_list_pos + num_timesteps).long()])
+        snr = alpha_t**2 / sigma_t**2 
+        return snr
+        
     def critic_loss(
         self,
         image_or_video_shape,

@@ -621,6 +621,7 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             # noise_context_starts[start:end] = 0
             noise_context_ends[start:end] = block_index * attention_block_size
 
+        print("causal_wan.py line638: USING teacher forcing mask. Set device for block creation to \"cpu\" instead of \"device\"")
         def attention_mask(b, h, q_idx, kv_idx):
             # first design the mask for clean frames
             clean_mask = (q_idx < clean_ends) & (kv_idx < context_ends[q_idx])
@@ -633,8 +634,17 @@ class CausalWanModel(ModelMixin, ConfigMixin):
             eye_mask = q_idx == kv_idx
             return eye_mask | clean_mask | noise_mask
 
+        noise_noise_ends = noise_noise_ends.to('cpu')
+        noise_context_ends = noise_context_ends.to('cpu')
+        noise_noise_starts = noise_noise_starts.to('cpu')
+        noise_context_starts = noise_context_starts.to('cpu')
+        context_ends = context_ends.to('cpu')
+
+        # block_mask = create_block_mask(attention_mask, B=None, H=None, Q_LEN=total_length + padded_length,
+        #                                KV_LEN=total_length + padded_length, _compile=False, device=device)
         block_mask = create_block_mask(attention_mask, B=None, H=None, Q_LEN=total_length + padded_length,
-                                       KV_LEN=total_length + padded_length, _compile=False, device=device)
+                                KV_LEN=total_length + padded_length, _compile=False, device='cpu')
+        block_mask = block_mask.to(device=device)
 
         if DEBUG:
             print(block_mask)
@@ -945,6 +955,8 @@ class CausalWanModel(ModelMixin, ConfigMixin):
         if clip_fea is not None:
             context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
             context = torch.concat([context_clip, context], dim=1)
+
+        import ipdb;ipdb.set_trace()  # debug
 
         if clean_x is not None:
             clean_x = [self.patch_embedding(u.unsqueeze(0)) for u in clean_x]

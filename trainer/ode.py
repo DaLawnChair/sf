@@ -42,17 +42,32 @@ class Trainer:
 
         set_seed(config.seed + global_rank)
 
-        if self.is_main_process and not self.disable_wandb:
-            wandb.login(host=config.wandb_host, key=config.wandb_key)
+        # if self.is_main_process and not self.disable_wandb:
+        #     wandb.login(host=config.wandb_host, key=config.wandb_key)
+        #     wandb.init(
+        #         config=OmegaConf.to_container(config, resolve=True),
+        #         name=config.config_name,
+        #         mode="online",
+        #         entity=config.wandb_entity,
+        #         project=config.wandb_project,
+        #         dir=config.wandb_save_dir
+        #     )
+        
+        if self.is_main_process: # always keep an instance of an offline wandb for training
+            # wandb.login(host=config.wandb_host, key=config.wandb_key)
+            
+            os.makedirs(config.wandb_save_dir, exist_ok=True)
             wandb.init(
                 config=OmegaConf.to_container(config, resolve=True),
                 name=config.config_name,
-                mode="online",
+                mode="offline",
                 entity=config.wandb_entity,
                 project=config.wandb_project,
                 dir=config.wandb_save_dir
             )
-
+            print(f"Wandb initalized. Saving to {config.wandb_save_dir}")
+            
+        self.output_path = config.logdir
         self.output_path = config.logdir
 
         # Step 2: Initialize the model and optimizer
