@@ -7,7 +7,7 @@ from .ode_regression import ODERegression
 from .progressive_dmd import ProgressiveDMD
 from .bidirectional_match_dmd import BidirectionalMatchDMD
 from .bidirectional_match_dmd_tf import BidirectionalMatchDMDTeacherForcing
-
+from .dmd_no_fake_score_model import DMDNoFakeScoreModel
 __all__ = [
     "CausalDiffusion",
     "CausVid",
@@ -17,5 +17,6 @@ __all__ = [
     "ODERegression",
     "ProgressiveDMD",
     "BidirectionalMatchDMD",
-    "BidirectionalMatchDMDTeacherForcing"
+    "BidirectionalMatchDMDTeacherForcing",
+    "DMDNoFakeScoreModel"
 ]

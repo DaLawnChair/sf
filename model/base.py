@@ -39,7 +39,7 @@ class BaseModel(nn.Module):
         self.real_score = WanDiffusionWrapper(model_name=self.real_model_name, is_causal=False)
         self.real_score.model.requires_grad_(False)
 
-        self.fake_score = WanDiffusionWrapper(model_name=self.fake_model_name, is_causal=False)
+        self.fake_score = WanDiffusionWrapper(model_name=self.fake_model_name, is_causal=args.use_causal_fake_score)
         self.fake_score.model.requires_grad_(True)
 
         self.text_encoder = WanTextEncoder()
@@ -226,7 +226,9 @@ class SelfForcingModel(BaseModel):
 
         if self.args.distribution_loss == "progressive_dmd" or \
             self.args.distribution_loss == "bidirectional_match_dmd" or \
-            self.args.distribution_loss == "bidirectional_match_dmd_tf":
+            self.args.distribution_loss == "bidirectional_match_dmd_tf" or \
+            self.args.progressive_enabled:
+            
             self.inference_pipeline = ProgressiveSelfForcingTrainingPipeline(
                 denoising_step_list=self.denoising_step_list,
                 scheduler=self.scheduler,

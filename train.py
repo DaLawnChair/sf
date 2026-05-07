@@ -3,7 +3,7 @@ import os
 from omegaconf import OmegaConf
 import wandb
 
-from trainer import DiffusionTrainer, GANTrainer, ODETrainer, ScoreDistillationTrainer, ProgressiveScoreDistillationTrainer
+from trainer import DiffusionTrainer, GANTrainer, ODETrainer, ScoreDistillationTrainer, ProgressiveScoreDistillationTrainer, ScoreDistillationCausalFakeScoreTrainer, ScoreDistillationNoFakeScoreModelTrainer
 
 import torch 
 
@@ -23,6 +23,8 @@ def main():
     config = OmegaConf.merge(default_config, config)
     config.no_save = args.no_save
     config.no_visualize = args.no_visualize
+    
+    print("config.progressive_enabled",config.progressive_enabled)
 
     # get the filename of config_path
     config_name = os.path.basename(args.config_path).split(".")[0]
@@ -43,6 +45,12 @@ def main():
         
     elif config.trainer == "progressive_score_distillation":
         trainer = ProgressiveScoreDistillationTrainer(config)
+    elif config.trainer == "score_distillation_causal_fake_score":
+        trainer = ScoreDistillationCausalFakeScoreTrainer(config)
+    elif config.trainer == "score_distillation_no_fake_score":
+        trainer = ScoreDistillationNoFakeScoreModelTrainer(config)
+    else:
+        raise ValueError(f"config.trainer={config.trainer} not implemented") 
         
     trainer.train()
 

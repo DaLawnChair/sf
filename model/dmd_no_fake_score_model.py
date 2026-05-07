@@ -1,4 +1,4 @@
-from pipeline import SelfForcingTrainingPipeline
+from pipeline import SelfForcingTrainingPipeline, ProgressiveSelfForcingTrainingPipeline
 import torch.nn.functional as F
 from typing import Optional, Tuple
 import torch
@@ -6,7 +6,7 @@ import torch
 from model.base import SelfForcingModel
 
 
-class DMD(SelfForcingModel):
+class DMDNoFakeScoreModel(SelfForcingModel):
     def __init__(self, args, device):
         """
         Initialize the DMD (Distribution Matching Distillation) module.
@@ -27,9 +27,12 @@ class DMD(SelfForcingModel):
         if args.gradient_checkpointing:
             self.generator.enable_gradient_checkpointing()
             self.fake_score.enable_gradient_checkpointing()
+            
+        self.fake_score = None
+        assert self.fake_score is None, "Fake score exists on DMDNoFakeScoreModel.__init__()"
 
         # this will be init later with fsdp-wrapped modules
-        self.inference_pipeline: SelfForcingTrainingPipeline = None
+        self.inference_pipeline: ProgressiveSelfForcingTrainingPipeline = None
 
         # Step 2: Initialize all dmd hyperparameters
         self.num_train_timestep = args.num_train_timestep
@@ -56,8 +59,10 @@ class DMD(SelfForcingModel):
         self.enable_latent_diff  = getattr(args, "enable_latent_diff", False)
         self.latent_diff_coef = getattr(args, "latent_diff_coef", 0)
         
+        
         self.use_causal_fake_score = getattr(args, "use_causal_fake_score", False)
         print("use_causal_fake_score:", self.use_causal_fake_score)
+        
         
 
     def get_latent_boundary_diff(self,latent):
@@ -91,9 +96,17 @@ class DMD(SelfForcingModel):
             - kl_grad: a tensor representing the KL grad.
             - kl_log_dict: a dictionary containing the intermediate tensors for logging.
         """
+        
+        
+        # ensure that the cache is reset before usage
+        assert torch.all(torch.Tensor([(value==0).all() for block in self.inference_pipeline.crossattn_cache for key, value in block.items() if key != "is_init"])), "residuals exist in code that are making generation with kv_cache here non-empty"
+        assert torch.all(torch.Tensor([(value==0).all() for block in self.inference_pipeline.kv_cache1 for key, value in block.items()])), "residuals exist in code that are making generation with kv_cache here non-empty"
+
+                
         # Step 1: Compute the fake score
         if self.use_causal_fake_score:
-            _, pred_fake_image_cond = self.fake_score(
+            # compute fake score with causal generation, matching teacher forcing generation
+            _, pred_fake_image_cond = self.generator(
                 noisy_image_or_video=noisy_image_or_video,
                 conditional_dict=conditional_dict,
                 timestep=timestep,
@@ -101,15 +114,20 @@ class DMD(SelfForcingModel):
                 aug_t=None
             )
         else:
-            _, pred_fake_image_cond = self.fake_score(
+            # give in 0'd out kv_cache and crossattn, to mimic bidirectional generation
+            # note potential logic bug if the model natively does not generate videos with all latent frames
+            _, pred_fake_image_cond = self.generator(
                 noisy_image_or_video=noisy_image_or_video,
                 conditional_dict=conditional_dict,
-                timestep=timestep
+                timestep=timestep,
+                kv_cache=self.inference_pipeline.kv_cache1,
+                crossattn_cache=self.inference_pipeline.crossattn_cache,
+                current_start=0
             )
 
         if self.fake_guidance_scale != 0.0:
             if self.use_causal_fake_score:
-                _, pred_fake_image_uncond = self.fake_score(
+                _, pred_fake_image_uncond = self.generator(
                     noisy_image_or_video=noisy_image_or_video,
                     conditional_dict=conditional_dict,
                     timestep=timestep,
@@ -117,10 +135,17 @@ class DMD(SelfForcingModel):
                     aug_t=None
                 )
             else:
-                _, pred_fake_image_uncond = self.fake_score(
+                assert torch.all(torch.Tensor([(value==0).all() for block in self.inference_pipeline.crossattn_cache for key, value in block.items() if key != "is_init"])), "residuals exist in code that are making generation with kv_cache here non-empty"
+                assert torch.all(torch.Tensor([(value==0).all() for block in self.inference_pipeline.kv_cache1 for key, value in block.items()])), "residuals exist in code that are making generation with kv_cache here non-empty"
+
+                
+                _, pred_fake_image_uncond = self.generator(
                     noisy_image_or_video=noisy_image_or_video,
                     conditional_dict=unconditional_dict,
-                    timestep=timestep
+                    timestep=timestep,
+                    kv_cache=self.inference_pipeline.kv_cache1,
+                    crossattn_cache=self.inference_pipeline.crossattn_cache,
+                    current_start=0
                 )
             pred_fake_image = pred_fake_image_cond + (
                 pred_fake_image_cond - pred_fake_image_uncond
@@ -158,8 +183,6 @@ class DMD(SelfForcingModel):
             grad = grad / normalizer
         grad = torch.nan_to_num(grad)
 
-        
-        
         if self.enable_latent_grad_diff:
             
             pred_fake_image_diff = self.get_latent_boundary_diff(pred_fake_image)
@@ -336,115 +359,6 @@ class DMD(SelfForcingModel):
         )
         
         assert not torch.isnan(dmd_loss.double()).any().item(), "Error: dmd_loss has Nan"
-
+        
 
         return dmd_loss, dmd_log_dict
-
-    def critic_loss(
-        self,
-        image_or_video_shape,
-        conditional_dict: dict,
-        unconditional_dict: dict,
-        clean_latent: torch.Tensor,
-        initial_latent: torch.Tensor = None
-    ) -> Tuple[torch.Tensor, dict]:
-        """
-        Generate image/videos from noise and train the critic with generated samples.
-        The noisy input to the generator is backward simulated.
-        This removes the need of any datasets during distillation.
-        See Sec 4.5 of the DMD2 paper (https://arxiv.org/abs/2405.14867) for details.
-        Input:
-            - image_or_video_shape: a list containing the shape of the image or video [B, F, C, H, W].
-            - conditional_dict: a dictionary containing the conditional information (e.g. text embeddings, image embeddings).
-            - unconditional_dict: a dictionary containing the unconditional information (e.g. null/negative text embeddings, null/negative image embeddings).
-            - clean_latent: a tensor containing the clean latents [B, F, C, H, W]. Need to be passed when no backward simulation is used.
-        Output:
-            - loss: a scalar tensor representing the generator loss.
-            - critic_log_dict: a dictionary containing the intermediate tensors for logging.
-        """
-
-        # Step 1: Run generator on backward simulated noisy input
-        with torch.no_grad():
-            generated_image, _, denoised_timestep_from, denoised_timestep_to = self._run_generator(
-                image_or_video_shape=image_or_video_shape,
-                conditional_dict=conditional_dict,
-                initial_latent=initial_latent
-            )
-
-        # Step 2: Compute the fake prediction
-        min_timestep = denoised_timestep_to if self.ts_schedule and denoised_timestep_to is not None else self.min_score_timestep
-        max_timestep = denoised_timestep_from if self.ts_schedule_max and denoised_timestep_from is not None else self.num_train_timestep
-        critic_timestep = self._get_timestep(
-            min_timestep,
-            max_timestep,
-            image_or_video_shape[0],
-            image_or_video_shape[1],
-            self.num_frame_per_block,
-            uniform_timestep=True
-        )
-
-        if self.timestep_shift > 1:
-            critic_timestep = self.timestep_shift * \
-                (critic_timestep / 1000) / (1 + (self.timestep_shift - 1) * (critic_timestep / 1000)) * 1000
-
-        critic_timestep = critic_timestep.clamp(self.min_step, self.max_step)
-
-        critic_noise = torch.randn_like(generated_image)
-        noisy_generated_image = self.scheduler.add_noise(
-            generated_image.flatten(0, 1),
-            critic_noise.flatten(0, 1),
-            critic_timestep.flatten(0, 1)
-        ).unflatten(0, image_or_video_shape[:2])
-
-        if self.use_causal_fake_score:
-            print("perform causal fake score critic gen")
-            _, pred_fake_image = self.fake_score(
-                noisy_image_or_video=noisy_generated_image,
-                conditional_dict=conditional_dict,
-                timestep=critic_timestep,
-                clean_x=generated_image,
-                aug_t=None
-            )
-        else:
-            _, pred_fake_image = self.fake_score(
-                noisy_image_or_video=noisy_generated_image,
-                conditional_dict=conditional_dict,
-                timestep=critic_timestep
-            )
-
-        # Step 3: Compute the denoising loss for the fake critic
-        if self.args.denoising_loss_type == "flow":
-            from utils.wan_wrapper import WanDiffusionWrapper
-            flow_pred = WanDiffusionWrapper._convert_x0_to_flow_pred(
-                scheduler=self.scheduler,
-                x0_pred=pred_fake_image.flatten(0, 1),
-                xt=noisy_generated_image.flatten(0, 1),
-                timestep=critic_timestep.flatten(0, 1)
-            )
-            pred_fake_noise = None
-        else:
-            flow_pred = None
-            pred_fake_noise = self.scheduler.convert_x0_to_noise(
-                x0=pred_fake_image.flatten(0, 1),
-                xt=noisy_generated_image.flatten(0, 1),
-                timestep=critic_timestep.flatten(0, 1)
-            ).unflatten(0, image_or_video_shape[:2])
-
-        denoising_loss = self.denoising_loss_func(
-            x=generated_image.flatten(0, 1),
-            x_pred=pred_fake_image.flatten(0, 1),
-            noise=critic_noise.flatten(0, 1),
-            noise_pred=pred_fake_noise,
-            alphas_cumprod=self.scheduler.alphas_cumprod,
-            timestep=critic_timestep.flatten(0, 1),
-            flow_pred=flow_pred
-        )
-
-        # Step 5: Debugging Log
-        critic_log_dict = {
-            "critic_timestep": critic_timestep.detach()
-        }
-
-        return denoising_loss, critic_log_dict
-
-    

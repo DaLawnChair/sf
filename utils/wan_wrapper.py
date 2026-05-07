@@ -153,6 +153,7 @@ class WanDiffusionWrapper(torch.nn.Module):
             self.model = WanModel.from_pretrained(f"{model_path}")
         self.model.eval()
 
+        self.is_causal = is_causal
         # For non-causal diffusion, all frames share the same timestep
         self.uniform_timestep = not is_causal
 
